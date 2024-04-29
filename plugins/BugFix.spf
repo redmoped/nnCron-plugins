@@ -1,0 +1,455 @@
+\ Файл:       BugFix.spf
+\ Автор:      dothen
+\ Дата:       26.03.2023
+\ Версия:     1.26
+\ Описание: Исправление багов.
+
+\ Плагин подключать первым.
+\ Плагин состоит из двух частей.
+\ Первая часть загружается перед загрузкой плагинов, для исправления ошибок в nnCron.
+\ Вторая часть загружается автоматически после загрузки плагинов, для исправления ошибок в плагинах.
+\ Исправление ошибок в nnCron до загрузки плагинов делается НА СЛУЧАЙ
+\ когда исправляемое слово будет ВЫПОЛНЯТЬСЯ на этапе компиляции плагинов.
+\ Т.е. чтобы выполнялись уже исправленные слова.
+\ Например 2CONSTANT, или IMMEDIATE-слово в котором будет вызов исправляемого слова, и т.п.
+
+\ Исходники:
+\ https://github.com/nnCron/nnCron/archive/master.zip
+\ http://www.nncron.ru/download/nnsrc.zip
+\ http://www.nncron.ru/download/nnlib.zip
+\ http://www.nncron.ru/download/src.rar
+
+C" CALL!" FIND NIP 0=
+[IF]
+
+\ Подставляет в указанный адрес вызов указанного слова.
+: CALL! ( addr-to addr-from -- )
+    0x0E8 OVER C!     \ call-code
+    1+ TUCK CELL+ - SWAP !
+;
+
+FALSE [IF]  \ Записывать в лог имена загружаемых плагинов.
+S" Load plugin (PID %PID%)" EVAL-SUBST CRON-LOG
+CURFILE @ ASCIIZ> CRON-LOG
+:NONAME ( a u -- ) 2DUP CRON-LOG INCLUDED ; ' INCLUDE 51 + CALL!
+[THEN]
+
+TRUE VALUE BugFixLoad?
+
+WARNING @ WARNING 0!
+: BeforeCrontabLoading
+    BugFixLoad? \ Не загружать плагин повторно при каждом перечитывании кронтабов.
+    IF S" plugins\BugFix.spf" INCLUDED THEN \ Исправление ошибок в плагинах перед загрузкой кронтабов.
+    BeforeCrontabLoading ;
+WARNING !
+
+\ Слово "Стало:" означает "Стало эквивалентно" (т.к. :NONAME или новое слово).
+\ ----------------------------------
+\ Файл:   src.rar\lib\ext\double.f
+\ Слово:  2CONSTANT
+\ Строка: 3
+\ Синтаксическая ошибка.
+
+\ Не выделяется память для константы.
+\ http://www.nncron.ru/forums/viewtopic.php?f=5&t=13331
+
+\ Было:       : 2CONSTANT CREATE HERE 2! DOES> 2@ ;
+
+\ SEE 2CONSTANT
+\ 
+\ 4BF05C E80EA6FFFF       CALL    4B966F  ( CREATE )
+\ 4BF061 E8FA7DFFFF       CALL    4B6E60  ( HERE )        0x4BF061 - 0x4BF05C = 0x5 (5)
+\ 4BF066 E8EB32FFFF       CALL    4B2356  ( 2! )          0x4BF066 - 0x4BF05C = 0xA (10)
+\ 4BF06B E83BA6FFFF       CALL    4B96AB  ( (DOES1) )
+\ 4BF070 E87EA6FFFF       CALL    4B96F3  ( (DOES2) )
+\ 4BF075 E8BF32FFFF       CALL    4B2339  ( 2@ )
+\ 4BF07A C3               RET     NEAR
+\ 4BF07B 1A634B           SBB     AH , 4B [EBX]
+\ END-CODE
+
+' , ' 2CONSTANT 5  + CALL!
+' , ' 2CONSTANT 10 + CALL!
+
+\ Стало:      : 2CONSTANT CREATE , , DOES> 2@ ;
+
+\ SEE 2CONSTANT
+\ 
+\ 4BF05C E80EA6FFFF       CALL    4B966F  ( CREATE )
+\ 4BF061 E8327EFFFF       CALL    4B6E98  ( , )
+\ 4BF066 E82D7EFFFF       CALL    4B6E98  ( , )
+\ 4BF06B E83BA6FFFF       CALL    4B96AB  ( (DOES1) )
+\ 4BF070 E87EA6FFFF       CALL    4B96F3  ( (DOES2) )
+\ 4BF075 E8BF32FFFF       CALL    4B2339  ( 2@ )
+\ 4BF07A C3               RET     NEAR
+\ 4BF07B 1A634B           SBB     AH , 4B [EBX]
+\ END-CODE
+
+\ -----------------------------------------
+\ Файл:   nnlib.zip\~nn\lib\time2num.f
+\ Слово:  1-7
+\ Строка: 53
+\ Логическая ошибка.
+
+\ Слово 1-7 устанавливает для дней недели диапазон в 8 дней! ( 0 1 2 3 4 5 6 7 )
+\ В структуре CRON-TIME поле CRON-T-WDAY занимает 7 байт.
+\ Т.о. дни недели записываются в структуру не на свои места а со смещением в 1 байт.
+
+\ Подставляем вызов слова 1 вместо слова 0
+' 1 ' 1-7 CALL!
+
+\ Было:       : 1-7  0 7  SET-RANGE WEEKDAYS ;
+\ Стало:      : 1-7  1 7  SET-RANGE WEEKDAYS ;
+
+\ Файл:   src.rar\~nn\lib\time2num.f
+\ Слово:  1-7
+\ Строка: 49 - Тут нет ошибки.
+
+\ -----------------------------------------------------------
+\ Файл:   nnCron-master.zip\nnCron-master\src\ttable.f
+\ Файл:   nnsrc.zip\cron\ttable.f
+\ Слово:  set-cron-time-table
+\ Строка: 65 закомментирована
+         \ table END-RANGE BEG-RANGE - 1+ 1 FILL
+\ Это причина некорректной работы слов которые работают с временем запуска задачи.
+\ Синтаксическая ошибка (не снят комментарий).
+
+:NONAME ( -- )
+    16 RP+@ END-RANGE BEG-RANGE - 1+ 1 FILL 1
+\ 16 RP+@ это table - локальная переменная "внешнего" слова.
+;
+' set-cron-time-table 50 + CALL!
+
+\ 1 FILL делается только один раз в слове CRON-NODE0! при создании задачи.
+\ Т.е. первый или дефолтный Time: будет правильный, но
+\ 1 FILL должно делаться для каждого Time: если их несколько в задаче.
+
+\ :NONAME ( addr u -- )
+\     ERASE CRON-TIME CRON-T-MIN [ 60 24 + 31 + 7 + 12 + YEAR-RANGE 1+ + ] LITERAL 1 FILL
+\ ;
+\ ' AddTime 100 + CALL!
+
+\ ----------------------------------------
+\ Файл:   nnlib.zip\~nn\lib\time-test.f
+\ Файл:   src.rar\~nn\lib\time-test.f
+\ Слово:  (N-TEST)
+\ Строка: 37(31)    TEST-NUM STEP-NUM MOD 0= N-TEST>
+\ Строка: 74(68)    TEST-NUM BEG-NUM - STEP-NUM MOD 0=  AND
+\ Логические ошибки.
+
+\ Некорректное вычисление с шагом.
+\ Подробности (т.е. в каких ситуациях) не записал сразу,
+\ надо будет снова рыть, потому что не очевидно.
+\ http://www.nncron.ru/forums/viewtopic.php?p=36706#p36706
+
+:NONAME  ( n -- ? )
+    DROP FALSE TEST-NUM 1+ BEG-RANGE DO I TEST-NUM = OR STEP-NUM +LOOP
+;
+' (N-TEST) 357 + CALL!
+
+:NONAME  ( n -- ? )
+    DROP FALSE END-NUM 1+ BEG-NUM DO I TEST-NUM = OR STEP-NUM +LOOP
+;
+' (N-TEST) 996 + CALL!
+
+\ Было:  TEST-NUM STEP-NUM MOD 0= N-TEST>
+\ Стало: TEST-NUM STEP-NUM MOD DROP FALSE TEST-NUM 1+ BEG-RANGE DO I TEST-NUM = OR STEP-NUM +LOOP N-TEST>
+\ Было:  TEST-NUM BEG-NUM - STEP-NUM MOD 0=  AND
+\ Стало: TEST-NUM BEG-NUM - STEP-NUM MOD DROP FALSE END-NUM 1+ BEG-NUM DO I TEST-NUM = OR STEP-NUM +LOOP N-TEST>
+
+\ --------------------------------------------------------------
+\ Файл:   nnCron-master.zip\nnCron-master\src\assumed.f
+\ Файл:   nnsrc.zip\cron\assumed.f
+\ Слово:  ASSUMED-NEXT-1TIME
+\ Логические ошибки.
+
+\ Дни недели должны изменяться в цикле "дней" в цикле "месяца" и в цикле "года",
+\ а изменяются только в цикле "дней" (Строка 64),
+\ следовательно слово test-a.W выдаёт не тот результат.
+
+: FixNext  > a.Y a.M a.D WEEK-DAY TO a.W ;
+' FixNext ' ASSUMED-NEXT-1TIME 571 + CALL!
+' FixNext ' ASSUMED-NEXT-1TIME 654 + CALL!
+
+\ Строка: 70
+\ Было:         a.M 12 >
+\ Стало:        a.M 12 > a.Y a.M a.D WEEK-DAY TO a.W
+\ Строка: 76
+\ Было:         a.Y MAX-YEAR >
+\ Стало:        a.Y MAX-YEAR > a.Y a.M a.D WEEK-DAY TO a.W
+
+\ -------------------------------------------------------------
+\ Файл: nnCron-master.zip\nnCron-master\src\assumed.f
+\ Файл: nnsrc.zip\cron\assumed.f
+\ Слово: ASSUMED-PREV-1TIME
+\ Логические ошибки.
+
+\ Дни недели должны изменяться в цикле "дней" в цикле "месяца" и в цикле "года",
+\ а изменяются только в цикле "дней" (Строка 121),
+\ следовательно слово test-a.W выдаёт не тот результат.
+
+: FixPrev  < a.Y a.M a.D WEEK-DAY TO a.W ;
+' FixPrev ' ASSUMED-PREV-1TIME 619 + CALL!
+' FixPrev ' ASSUMED-PREV-1TIME 722 + CALL!
+
+\ Строка: 128
+\ Было:         a.M 1 <
+\ Стало:        a.M 1 < a.Y a.M a.D WEEK-DAY TO a.W
+\ Строка: 133
+\ Было:         a.Y MIN-YEAR <
+\ Стало:        a.Y MIN-YEAR < a.Y a.M a.D WEEK-DAY TO a.W
+
+\ -------------------------------------------------------------
+\ Файл: nnCron-master.zip\nnCron-master\src\assumed.f
+\ Файл: nnsrc.zip\cron\assumed.f
+\ Слово: ASSUMED-PREV-2TIME
+\ Логические ошибки.
+\ http://www.nncron.ru/forums/viewtopic.php?f=5&t=13681
+
+\ Дни недели должны изменяться в цикле "дней" в цикле "месяца" и в цикле "года",
+\ а изменяются только в цикле "дней" (Строка 238),
+\ следовательно слово test-a.W выдаёт не тот результат.
+
+' FixPrev ' ASSUMED-PREV-2TIME 1196 + CALL!
+' FixPrev ' ASSUMED-PREV-2TIME 1443 + CALL!
+
+\ Строка: 249
+\ Было:         a.M 1 <
+\ Стало:        a.M 1 < a.Y a.M a.D WEEK-DAY TO a.W
+\ Строка: 258
+\ Было:         a.Y MIN-YEAR <
+\ Стало:        a.Y MIN-YEAR < a.Y a.M a.D WEEK-DAY TO a.W
+
+\ ---------------------------------------------------------
+\ Файл:   nnCron-master.zip\nnCron-master\src\hint.f
+\ Файл:   nnsrc.zip\cron\hint.f
+\ Слово:  (HINT)
+\ Строка: 14
+\ Логическая ошибка.
+
+\ <HINT-POS> = 0 по умолчанию.
+\ 0 0 HINT-POS в итоге выполняет 0 <HINT-POS> !
+\ Если <HINT-POS> = 0 то параметр -pos не добавляется в строку запуска tm.exe
+\ и позиция вычисляется при создании окна хинта исходя из размера
+\ рабочего стола и размера хинта (nnsrc.zip\cron\tm\hint.f).
+
+' TRUE ' (HINT) 261 + CALL!
+
+\ Было:  <HINT-POS>  @ ?DUP IF #xy S"  -pos " HOLDS THEN
+\ Стало: <HINT-POS>  @ TRUE IF #xy S"  -pos " HOLDS THEN
+
+\ --------------------------------
+\ Файл nnlib.zip\~nn\lib\time.f
+\ Слово MINUTE+
+\ Строка 253
+\ Строка 256
+\ Логические ошибки.
+
+\ Некорректное вычисление когда начальная или
+\ промежуточная(внутри слова в цикле) сумма минут равна нулю.
+
+\ Примеры:
+\ 2020 1 1 0 0 0 MINUTE+ . . . . . CR
+\ 60 23 31 12 2019
+
+\ 2020 1 1 0 1 -1 MINUTE+ . . . . . CR
+\ 60 23 31 12 2019
+
+\ 2020 1 1 0 0 -60 MINUTE+ . . . . . CR
+\ 60 22 31 12 2019
+
+' < ' MINUTE+  90 + CALL!
+' < ' MINUTE+ 123 + CALL!
+' NOOP ' MINUTE+  95 + CALL!
+' NOOP ' MINUTE+ 128 + CALL!
+
+\ Строка 253
+\ Было:  m mins + DUP 0 > 0=
+\ Надо:  m mins + DUP 0<
+\ Стало: m mins + DUP 0 < NOOP
+
+\ Строка 256
+\ Было:  BEGIN DUP 0 > 0= WHILE
+\ Надо:  BEGIN DUP 0< WHILE
+\ Стало: BEGIN DUP 0 < NOOP WHILE
+
+\ ------------------------------------------------------------
+\ Файл:   nnCron-master.zip\nnCron-master\src\winsta.f
+\ Слово:  TQUERY
+\ Строка: 191
+\ Файл:   nnCron-master.zip\nnCron-master\src\crontab.f
+\ Слово:START-APP?
+\ Строка: 1245
+\ Утечка памяти при работе TQUERY: , QSTART-APP: , QSTART-APPW:
+\ http://www.nncron.ru/forums/viewtopic.php?f=5&t=13682
+
+\ MessageBoxA запускается в отдельном потоке.
+\ Выход выполняет слово CLOSE-WINDOW-AND-STOP
+\ сначала закрывает окно MessageBoxA, если окно не закрылось тогда останавливает поток словом STOP.
+\ MessageBoxA с флагом MB_YESNO не реагирует на сообщение WM_CLOSE (из слова CLOSE-WINDOW-PROC)
+\ т.е. окно не закрывается и поток удаляется словом STOP и происходит утечка памяти.
+\ http://www.nncron.ru/forums/viewtopic.php?p=35585#p35585
+\ В словах TQUERY и START-APP? установлен флаг MB_YESNO.
+
+\ Есть два решения:
+\ 1) Запускать MessageBoxA с флагом MB_OKCANCEL вместо MB_YESNO.
+\ 2) Использовать функцию MessageBoxTimeoutA.
+\ MessageBoxTimeoutA недокументированная функция API, появилась в Windows XP.
+\ https://www.codeproject.com/Articles/7914/MessageBoxTimeout-API
+\ https://www.manhunter.ru/assembler/1594_messagebox_s_taymerom_obratnogo_otscheta.html
+
+TRUE [IF]
+
+1 ' TQUERY 66 + !     \ MB_OKCANCEL
+1 ' TQUERY 139 + !    \ IDOK
+
+1 ' START-APP? 86 + !     \ MB_OKCANCEL
+1 ' START-APP? 182 + !    \ IDOK
+
+[ELSE]
+
+WINAPI: MessageBoxTimeoutA USER32.DLL
+\ 32000 CONSTANT MB_TIMEDOUT
+\ 4096 CONSTANT MB_SYSTEMMODAL
+:NONAME ( time-out flags addr u -- result ? )
+    DROP >R >R
+    1000 *
+    0
+    R> 4096 OR
+    S" %ServiceName% - %CUR-TASK-NAME%" EVAL-SUBST DROP
+    R>
+    0
+    MessageBoxTimeoutA
+    DUP 32000 =
+    IF DROP 0 FALSE ELSE TRUE THEN
+;
+' TimeMessageBox JMP
+
+[THEN]
+
+\ -----------------------------------------------
+\ Файл:   nnlib.zip\~nn\lib\win\sys\ntqinfo.f
+\ Константа: /SYSTEM_PERFORMANCE_INFORMATION
+\ Строка: 69
+\ Применяется в словах (CPU-USAGE) и CPU-USAGE.
+
+\ Размер структуры SYSTEM_PERFORMANCE_INFORMATION зависит от версии ОС:
+\ 0x0138 (312) байт в версиях с 3.10 по 6.0;    (с Windows NT 3.1 по Windows Vista)
+\ 0x0148 (328) байт в версии 6.1;               (в Windows 7)
+\ 0x0158 (344) байт в версии 6.2 и выше.        (в Windows 8 и выше)
+\ https://geoffchappell.com/studies/windows/km/ntoskrnl/api/ex/sysinfo/performance.htm
+\ https://gist.github.com/jNizM/ddf02494cd78e743eed776ce6164758f
+
+WinVerMajor 10 * WinVerMinor + 61 = WinNT? AND      \ TRUE если Win7 (Windows NT 6.1)
+[IF]
+    328 ' /SYSTEM_PERFORMANCE_INFORMATION >BODY !
+[THEN]
+WinVerMajor 10 * WinVerMinor + 61 > WinNT? AND      \ TRUE если выше Win7
+[IF]
+    344 ' /SYSTEM_PERFORMANCE_INFORMATION >BODY !
+[THEN]
+
+
+\EOF
+
+[THEN]
+
+
+FALSE TO BugFixLoad?
+
+\ ------------------------------------------------------------------
+\ Исправление багов в плагинах.
+\ Эта часть плагина загружается подключением в BeforeCrontabLoading,
+\ т.е. перед загрузкой кронтабов когда плагины уже загружены.
+\ ------------------------------------------------------------------
+
+C" 1stCRONTAB" FIND NIP
+[IF]
+
+\ Файл:   tools.spf
+\ Слово:  1stCRONTAB
+\ Строка: 58
+\ Синтаксическая ошибка.
+
+:NONAME ( addr -- x )
+    @ NodeValue
+;
+' 1stCRONTAB 5 + CALL!
+
+\ Было:
+\ : 1stCRONTAB TAB-LIST @ TAB-FILENAME @ COUNT EVAL-SUBST ;
+\ Стало:
+\ : 1stCRONTAB TAB-LIST @ NodeValue TAB-FILENAME @ COUNT EVAL-SUBST ;
+
+[THEN]
+
+
+C" GET-RANDOM-FILE" FIND NIP
+[IF]
+
+\ Файл:   files_pick.spf
+\ Слово:  GET-RANDOM-FILE
+\ Строка: 112
+\ Логическая ошибка.
+\ http://www.nncron.ru/forums/viewtopic.php?f=5&t=13468
+\ При выходе из (FOR-FILES) память где лежит строка, освобождается FF-BUF FREE THROW.
+
+:NONAME ( -- a u )
+    FOUND-FULLPATH S>SZ
+;
+' GET-RANDOM-FILE 126 + CALL!
+
+\ Было:
+\   FOUND-FULLPATH
+\   FF-EXIT
+\ Стало:
+\   FOUND-FULLPATH S>SZ
+\   FF-EXIT
+
+[THEN]
+
+\ -----------------------------
+\ Исправление багов в tm.exe (incomplete)
+\ -----------------------------
+\ ModuleName ONLYNAME S" tm.exe" COMPARE 0=
+\ [IF]
+\ : CALL! ( addr-to addr-from -- )
+\    0x0E8 OVER C!     \ call-code
+\    1+ TUCK CELL+ - SWAP !
+\ ;
+
+\ ' , ' 2CONSTANT 5  + CALL!
+\ ' , ' 2CONSTANT 10 + CALL!
+
+\ [THEN]
+
+\EOF
+
+
+\ ------------- Debug -------------
+
+: Tprint ( addr -- ) @ ?DUP IF COUNT ELSE S" *" THEN TYPE SPACE ;
+
+\ Выводит в консоль адреса и значения элементов структуры CRON-TIME указанной задачи.
+\ Если в задаче несколько Time: то выводится структура для последнего Time:
+: TASK-TIME. { task \ cur-time -- }
+    task @ CRON-TIME-LIST @ TO cur-time
+    ." Minutes (0 - 59)     " cur-time CRON-MIN  Tprint CR
+    60 0 DO cur-time CRON-T-MIN  I + DUP . C@ . LOOP CR CR
+    ." Hours (0 - 23)       " cur-time CRON-HOUR Tprint CR
+    24 0 DO cur-time CRON-T-HOUR I + DUP . C@ . LOOP CR CR
+    ." Days (1 - 31)        " cur-time CRON-DAY  Tprint CR
+    31 0 DO cur-time CRON-T-DAY  I + DUP . C@ . LOOP CR CR
+    ." WDays (1 - 7)        " cur-time CRON-WDAY Tprint CR
+    7  0 DO cur-time CRON-T-WDAY I + DUP . C@ . LOOP CR CR
+    ." Months (1 - 12)      " cur-time CRON-MON  Tprint CR
+    12 0 DO cur-time CRON-T-MON  I + DUP . C@ . LOOP CR CR
+    ." Years (" MIN-YEAR . ." - " MAX-YEAR . ." ) " cur-time CRON-YEAR Tprint CR
+    YEAR-RANGE 1+ 0 DO cur-time CRON-T-YEAR I + DUP . C@ . LOOP CR CR
+
+    cur-time CRON-MIN  Tprint  cur-time CRON-HOUR Tprint
+    cur-time CRON-DAY  Tprint  cur-time CRON-MON  Tprint
+    cur-time CRON-WDAY Tprint  cur-time CRON-YEAR Tprint CR
+;
+
+\ Пример:    <taskname> TASK-TIME.
+
