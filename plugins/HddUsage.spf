@@ -1,0 +1,147 @@
+\ Файл:       HddUsage.spf
+\ Автор:      dothen
+\ Дата:       13.06.2019
+\ Версия:     1.01
+\ Описание: Получает значение активности жесткого диска.
+
+\ https://xakep.ru/2008/03/17/42794/
+
+\ Пример:
+\ Приложение будет запущено после того как
+\ активность диска будет меньше 5% в течение 10 секунд.
+\ #( HDD_USE
+\ NoActive
+\ Action:
+\ 10 5 (HDD-USAGE)
+\ START-APP: notepad.exe
+\ )#
+
+WINAPI: PdhOpenQueryA pdh.dll
+WINAPI: PdhLookupPerfNameByIndexA pdh.dll
+WINAPI: PdhMakeCounterPathA pdh.dll
+WINAPI: PdhAddCounterA pdh.dll
+WINAPI: PdhCollectQueryData pdh.dll
+WINAPI: PdhGetFormattedCounterValue pdh.dll
+WINAPI: PdhRemoveCounter pdh.dll
+WINAPI: PdhCloseQuery pdh.dll
+WINAPI: GetComputerNameA Kernel32.dll
+
+USER-CREATE szObjectName 256 USER-ALLOT
+USER-CREATE szCounterName 256 USER-ALLOT
+USER-CREATE szPath 256 USER-ALLOT
+USER-CREATE szCompName 256 USER-ALLOT
+
+0
+4 -- pdh_elm.szMachineName
+4 -- pdh_elm.szObjectName
+4 -- pdh_elm.szInstanceName
+4 -- pdh_elm.szParentInstance
+4 -- pdh_elm.dwInstanceIndex
+4 -- pdh_elm.szCounterName
+CONSTANT /PDH_COUNTER_PATH_ELEMENTS
+
+0
+4 -- CStatus
+4 -- longValue
+8 -- doubleValue
+8 -- largeValue
+4 -- AnsiStringValue
+4 -- WideStringValue
+CONSTANT /PDH_FMT_COUNTERVALUE
+
+0 CONSTANT ERROR_SUCCESS
+
+USER hQuery
+USER phCounter
+USER pdh_elm
+USER dwSize2
+USER dwType2
+USER pdhValue
+
+
+: START-HDD-USAGE ( -- ? )
+    FALSE
+    hQuery 0 0 PdhOpenQueryA
+    ERROR_SUCCESS <>
+    IF S" Error PdhOpenQueryA" CRON-LOG EXIT THEN
+
+\ Получаем имя объекта для которого будем делать подсчет производительности
+    256 dwSize2 !
+    dwSize2 szObjectName 234 0 PdhLookupPerfNameByIndexA
+    ERROR_SUCCESS <>
+    IF S" Error PdhLookupPerfNameByIndexA(1)" CRON-LOG EXIT THEN
+
+\ Получаем имя счетчика производительности
+    256 dwSize2 !
+    dwSize2 szCounterName 200 0 PdhLookupPerfNameByIndexA
+    ERROR_SUCCESS <>
+    IF S" Error PdhLookupPerfNameByIndexA(2)" CRON-LOG EXIT THEN
+
+\ Заполняем структуру PDH_COUNTER_PATH_ELEMENTS
+ /PDH_COUNTER_PATH_ELEMENTS ALLOCATE THROW pdh_elm !
+
+    256 dwSize2 !
+    dwSize2 szCompName GetComputerNameA
+    0= IF S" Error GetComputerNameA" CRON-LOG EXIT THEN
+
+    szCompName pdh_elm @ pdh_elm.szMachineName !
+    szObjectName pdh_elm @ pdh_elm.szObjectName !
+    Z" _Total" pdh_elm @ pdh_elm.szInstanceName !
+    0 pdh_elm @ pdh_elm.szParentInstance !
+    0 pdh_elm @ pdh_elm.dwInstanceIndex !
+    szCounterName pdh_elm @ pdh_elm.szCounterName !
+
+\ Формируем полный путь к счетчику
+    256 dwSize2 !
+    0 dwSize2 szPath pdh_elm @ PdhMakeCounterPathA
+    ERROR_SUCCESS <>
+    IF S" Error PdhMakeCounterPathA" CRON-LOG EXIT THEN
+
+\ Добавляем счетчик к нашему запросу
+    phCounter 0 szPath hQuery @ PdhAddCounterA
+    ERROR_SUCCESS <>
+    IF S" Error PdhAddCounterA" CRON-LOG EXIT THEN
+
+    /PDH_FMT_COUNTERVALUE ALLOCATE THROW pdhValue !
+    DROP TRUE
+;
+
+\ Выводим значение счетчика
+: HDD-USAGE ( -- n )
+    hQuery @ PdhCollectQueryData
+    ERROR_SUCCESS <>
+    IF S" Error PdhCollectQueryData" CRON-LOG THEN
+    pdhValue @ dwType2 0x00000100 phCounter @ PdhGetFormattedCounterValue \ #define PDH_FMT_LONG ((DWORD) 0x00000100)
+    ERROR_SUCCESS =
+    IF
+      pdhValue @ doubleValue @
+    ELSE
+      0 S" Error PdhGetFormattedCounterValue" CRON-LOG
+    THEN
+;
+
+\ Корректно завершаем обращение к PDH
+: END-HDD-USAGE ( -- )
+    phCounter @ PdhRemoveCounter DROP
+    hQuery @ PdhCloseQuery DROP
+    pdhValue @ FREE THROW
+    pdh_elm @ FREE THROW
+;
+
+\ Слово будет выполняться до тех пор пока
+\ в течение sec секунд процент активности диска не превысит pmax
+: (HDD-USAGE) { sec pmax \ cntn -- }
+    START-HDD-USAGE
+    IF
+      BEGIN
+          HDD-USAGE ( DUP . CR ) pmax <
+          IF cntn 1+ TO cntn ELSE 0 TO cntn THEN
+          1000 PAUSE
+      cntn sec >
+      UNTIL
+      END-HDD-USAGE
+    ELSE
+      S" Error START-HDD-USAGE" CRON-LOG
+    THEN
+;
+
