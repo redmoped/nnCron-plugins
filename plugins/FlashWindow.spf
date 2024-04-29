@@ -1,0 +1,90 @@
+\ Файл:       FlashWindow.spf
+\ Автор:      dothen
+\ Дата:       20.12.2018
+\ Версия:     1.01
+\ Описание:  Заставляет мигать указанное окно.
+
+\ Слова:
+\ FLASHWINDOW-CAPTION ( Timeout hwnd -- )
+\ FLASHWINDOW-TRAY ( Timeout hwnd -- )
+\ FLASHWINDOW-ALL ( Timeout hwnd -- )
+\ FLASHWINDOW-STOP ( hwnd -- )
+
+\ Пример:
+\ #( testflash \ Для остановки надо нажать Alt
+\ NoActive
+\ Action:
+\    S" notepad.exe" START-APP
+\    500 PAUSE
+\    GetForegroundWindow TO WIN-HWND
+\    3 0 DO
+\      50 WIN-HWND FLASHWINDOW-TRAY
+\      500 PAUSE
+\      50 WIN-HWND FLASHWINDOW-CAPTION
+\      500 PAUSE
+\    LOOP
+\    50 WIN-HWND FLASHWINDOW-ALL
+\    BEGIN
+\      100 PAUSE
+\      VK_MENU KEY-PRESSED?
+\      WIN-HWND IsWindow 0= OR
+\    UNTIL
+\    WIN-HWND FLASHWINDOW-STOP
+\ )#
+
+\ ---------------------------------------------
+
+\ Флаги режимов мигания окна
+\ 0x00000000 CONSTANT FLASHW_STOP      \ Восстанавливает исходное состояние окна и кнопки в Панели задач.
+\ 0x00000001 CONSTANT FLASHW_CAPTION   \ Мигает заголовок окна.
+\ 0x00000002 CONSTANT FLASHW_TRAY      \ Мигает кнопка окна в Панели задач.
+\ 0x00000003 CONSTANT FLASHW_ALL       \ Мигает заголовок окна и кнопка окна в Панели задач.
+\ 0x00000004 CONSTANT FLASHW_TIMER     \ Мигает без остановки если FLASHW.uCount = 0 и пока не вызвать FlashWindowEx с флагом FLASHW_STOP в структуре.
+\ 0x0000000C CONSTANT FLASHW_TIMERNOFG \ Мигает без остановки если FLASHW.uCount = 0 и пока окно не активно.
+
+WINAPI: FlashWindowEx User32.dll
+
+0
+1 CELLS -- FLASHW.cbSize    \ Размер структуры.
+1 CELLS -- FLASHW.hwnd      \ Дескриптор окна.
+1 CELLS -- FLASHW.dwFlags   \ Флаги.
+1 CELLS -- FLASHW.uCount    \ Число миганий. Если = 0 и флаг FLASHW_TIMER или FLASHW_TIMERNOFG то мигает без остановки
+1 CELLS -- FLASHW.dwTimeout \ Интервал в миллисекундах. Если = 0, то используется системное значение.
+CONSTANT /FLASHWINFO
+
+USER-VALUE flash
+
+: FLASHWINDOW-SET ( Timeout Count Flags hwnd -- )
+    DUP IsWindow
+    IF
+      /FLASHWINFO flash FLASHW.cbSize !
+      flash FLASHW.hwnd !
+      flash FLASHW.dwFlags !
+      flash FLASHW.uCount !
+      flash FLASHW.dwTimeout !
+      flash FlashWindowEx DROP
+    ELSE
+      2DROP 2DROP
+    THEN
+;
+
+: FLASHWINDOW-STOP ( hwnd -- )
+    /FLASHWINFO ALLOCATE THROW TO flash
+    >R 0 0 0 R> FLASHWINDOW-SET
+    flash FREE DROP
+;
+
+: FLASHWINDOW-START ( Timeout hwnd Flags -- )
+    SWAP >R 0 SWAP
+    /FLASHWINFO ALLOCATE THROW TO flash
+    0 0 0 R@ FLASHWINDOW-SET
+    R> FLASHWINDOW-SET
+    flash FREE DROP
+;
+
+: FLASHWINDOW-ALL ( Timeout hwnd -- ) 7 FLASHWINDOW-START ;
+
+: FLASHWINDOW-TRAY ( Timeout hwnd -- ) 6 FLASHWINDOW-START ;
+
+: FLASHWINDOW-CAPTION ( Timeout hwnd -- ) 5 FLASHWINDOW-START ;
+
