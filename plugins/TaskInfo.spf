@@ -1,0 +1,383 @@
+\ Файл:       TaskInfo.spf
+\ Автор:      dothen
+\ Дата:       18.01.2022
+\ Версия:     1.62
+\ Описание: Читает настройки и параметры задач.
+
+\ Слова:
+\ TASK-INFO ( a -- a u )   \ Читает настройки указанной задачи.
+\ TASK-INFO-ALL ( -- a u ) \ Читает настройки всех задач.
+
+\ Пример:
+\ #( test_TASK-INFO
+\ NoActive
+\ Action:
+\ <taskname> TASK-INFO MsgBox
+\ TASK-INFO-ALL S" log\Task.log" FWRITE
+\ )#
+\ -----------------------------------
+
+ModuleName ONLYNAME S" tm.exe" COMPARE 0= [IF] \EOF [THEN]
+
+\ Выполняет ASSUMED-PREV-TIME для указанной задачи.
+: TASK-ASSUMED-PREV-TIME ( a -- d t= | -- f= )
+    CUR-NODE >R
+    @ TO CUR-NODE ASSUMED-PREV-TIME
+    R> TO CUR-NODE
+;
+
+\ Выполняет ASSUMED-NEXT-TIME для указанной задачи.
+: TASK-ASSUMED-NEXT-TIME ( a -- d t= | -- f= )
+    CUR-NODE >R
+    @ TO CUR-NODE ASSUMED-NEXT-TIME
+    R> TO CUR-NODE
+;
+
+: CF-RUN? ( -- ? ) 0x100000 CUR-FLAG? ;
+: CF-INI-TIME? ( -- ? ) 0x200000 CUR-FLAG? ;
+
+
+MODULE: TASK_INFO_MODULE
+
+USER <TASKINFO>
+USER-VALUE CURNODE
+
+: >PAD ( a u -- ) PAD ZPLACE ;
+: +PAD ( a u -- ) PAD +ZPLACE ;
+: PADD ( a u -- ) +PAD CRLF +PAD ;
+: PAD> ( -- a u ) PAD ASCIIZ> ;
+
+: TASK-INFO-OPTIONS ( -- )
+    CUR-NODE >R
+    CURNODE TO CUR-NODE
+    CF-ACTIVE? 0= IF S" NoActive" PADD THEN
+    CF-LOGGING? 0= IF S" NoLog" PADD THEN
+    CF-NODEL? IF S" NoDel" PADD THEN
+    CF-ONCE? IF S" RunOnce" PADD THEN
+    CF-HOURLY? IF S" OnceAHour" PADD THEN
+    CF-DAILY? IF S" OnceADay" PADD THEN
+    CF-WEEKLY? IF S" OnceAWeek" PADD THEN
+    CF-MONTHLY? IF S" OnceAMonth" PADD THEN
+    CF-ALSO? IF S" Also" PADD THEN
+    CF-ASLOGGED? IF S" AsLoggedUser" PADD THEN
+    CF-LOAD-PROFILE? IF S" LoadProfile" PADD THEN
+    CF-SINGLE? IF S" SingleInstance" PADD THEN
+    CF-HYPER? IF S" HyperActive" PADD THEN
+    NoRunAs? IF S" NoRunAs" PADD THEN
+    CUR-NODE CRON-MISSED @ ?DUP
+    IF S" RunMissed " +PAD 60 /MOD N>S +PAD S" :" +PAD N>S PADD THEN
+    CF-RUN? IF S" RunImmediately" PADD THEN
+    CF-INI-TIME? IF S" IniTime" PADD THEN
+    R> TO CUR-NODE
+;
+
+: TASK-INFO-AUTHORIZATION ( -- )
+    CURNODE CRON-USER @ ?DUP IF COUNT S" User: " +PAD PADD
+    CURNODE CRON-DOMAIN @ ?DUP IF COUNT S" Domain: " +PAD PADD THEN
+    CURNODE CRON-PASSWORD @ ?DUP IF COUNT S" Password: " +PAD PADD THEN
+    CURNODE CRON-SU-FLAGS @ 4 = IF S" LogonBatch" PADD THEN
+    CURNODE CRON-SU-FLAGS @ 2 = IF S" LogonInteractive" PADD THEN
+    CURNODE CRON-SU-FLAGS @ 3 = IF S" LogonNetwork" PADD THEN
+    CURNODE CRON-SU-FLAGS @ 5 = IF S" LogonService" PADD THEN
+    THEN
+;
+
+: TASK-INFO-TIME ( -- )
+    CURNODE CRON-TIME-LIST
+    BEGIN @ ?DUP WHILE
+      >R R@ CRON-YEAR R@ CRON-WDAY R@ CRON-MON
+      R@ CRON-DAY  R@ CRON-HOUR R@ CRON-MIN
+      S" Time:" +PAD
+      6 0 DO
+        S"  " +PAD
+        @ ?DUP IF COUNT ELSE S" *" THEN +PAD
+      LOOP
+      CRLF +PAD
+      R>
+    REPEAT
+;
+
+\ ---Watch*---
+
+USER-VALUE W-PAR
+USER-VALUE W-PAR1
+USER-VALUE W-PAR3
+USER-VALUE W-OBJECT
+USER-VALUE W-RULE
+USER-VALUE W-FLAGS
+USER-VALUE W-FFN-FLAGS
+USER-VALUE W-STOP
+
+: GET-PAR ( cur-watch -- cur-watch )
+    DUP WATCH-PAR @ TO W-PAR
+    DUP WATCH-PAR1 TO W-PAR1
+    DUP WATCH-PAR3 @ TO W-PAR3
+    DUP WATCH-OBJECT @ TO W-OBJECT
+    DUP WATCH-RULE @ TO W-RULE
+    DUP WATCH-FLAGS @ TO W-FLAGS
+    DUP WATCH-FFN-FLAGS @ TO W-FFN-FLAGS
+    DUP WATCH-STOP @ TO W-STOP
+;
+
+: W-OBJECT> ( -- a u )
+    W-OBJECT ?DUP IF ASCIIZ> ELSE S" no data" THEN
+;
+
+: WHotKey ( -- )
+    W-PAR 0xFFFFFF00 AND HotKeyTag = IF S" WatchHotKey: " +PAD W-PAR3 COUNT PADD THEN
+;
+
+\ : WClipboard ( -- )
+\    W-PAR WatchCBTag = IF S" WatchClipboard: " +PAD W-OBJECT> PADD THEN
+\ ; \ У неактивных задач W-PAR = 0 для WatchClipboard:
+
+: WClipboard ( -- )
+    W-RULE ['] WATCH-CB-RULE = IF S" WatchClipboard: " +PAD W-OBJECT> PADD THEN
+;
+
+: WDrive ( -- )
+    W-PAR WatchCDTag = IF S" WatchDrive: " +PAD W-PAR1 1 PADD THEN
+    W-PAR WatchCDTag 0x80 OR = IF S" WatchDriveRemove: " +PAD W-PAR1 1 PADD THEN
+;
+
+
+: (WWin) ( n a u -- )
+    ROT WinWatchTag OR W-PAR = IF +PAD W-OBJECT> PADD ELSE 2DROP THEN
+;
+
+: WWin ( -- )
+   1 S" WatchWinCreate: " (WWin)
+   4 S" WatchWinActivate: " (WWin)
+   2 S" WatchWinDestroy: " (WWin)
+   6 S" WatchWindow: " (WWin)
+;
+
+: WProc ( -- )
+    W-PAR ProcWatchTag 1 OR = IF S" WatchProc: " +PAD W-OBJECT> PADD THEN \ no data если задача NoActive
+    W-PAR ProcWatchTag 0 OR = IF S" WatchProcStop: " +PAD W-OBJECT> PADD THEN
+;
+
+: WOff ( -- )
+    W-PAR WinOffTag 0 OR = IF S" WatchLogoff: " +PAD W-OBJECT> PADD THEN
+    W-PAR WinOffTag 2 OR = IF S" WatchLogon: " +PAD W-OBJECT> PADD THEN
+    W-PAR WinOffTag 1 OR = IF S" WatchShutdown" PADD THEN
+    W-PAR WinOffTag 9 OR = IF S" WatchQueryShutdown" PADD THEN
+;
+
+: (WPow) ( n a u -- )
+    ROT WatchPowTag OR W-PAR = IF PADD ELSE 2DROP THEN
+;
+
+: WPow ( -- )
+    4 S" WatchSuspend" (WPow)
+    18 S" WatchResumeAuto" (WPow)
+    7 S" WatchResume" (WPow)
+    5 S" WatchStandby" (WPow)
+    8 S" WatchResumeStandby" (WPow)
+    0 S" WatchQuerySuspend" (WPow)
+    1 S" WatchQueryStandby" (WPow)
+    9 S" WatchBatteryLow" (WPow)
+;
+
+: (WWTS) ( n a u -- )
+    ROT WatchWTSTag OR W-PAR = IF PADD ELSE 2DROP THEN
+;
+
+: WWTS ( -- )
+    1 S" WTSWatchConnect" (WWTS)
+    2 S" WTSWatchDisconnect" (WWTS)
+    7 S" WTSWatchLock" (WWTS)
+    6 S" WTSWatchLogoff" (WWTS)
+    5 S" WTSWatchLogon" (WWTS)
+    3 S" WTSWatchRemoteConnect" (WWTS)
+    4 S" WTSWatchRemoteDisconnect" (WWTS)
+    8 S" WTSWatchUnlock" (WWTS)
+;
+
+: WConnect ( -- )
+    W-RULE ['] WATCH-CONN-RULE = IF S" WatchConnect" PADD THEN
+    W-RULE ['] WATCH-DISCON-RULE = IF S" WatchDisconnect" PADD THEN
+;
+
+: WEvent ( -- )
+    W-RULE ['] WATCH-EVLOG-RULE = IF S" WatchEventLog: " +PAD W-OBJECT> PADD THEN
+;
+
+: WFile ( -- )
+    W-FFN-FLAGS  ['] WFILE-FLAGS =
+    IF S" WatchFile: " +PAD W-PAR1 @ ?DUP IF ASCIIZ> ELSE S" no data" THEN PADD THEN
+    W-FFN-FLAGS ['] WFILE-DELETE-FLAGS =
+    IF S" WatchFileDelete: " +PAD W-PAR1 @ ?DUP IF ASCIIZ> ELSE S" no data" THEN PADD THEN
+;
+
+: (WDR) ( n a u -- )
+     ROT W-PAR AND IF PADD ELSE 2DROP THEN
+;
+
+: WDir ( -- )
+    W-FFN-FLAGS ['] WDIR-FLAGS =
+    IF
+      S" WatchDir: " +PAD W-OBJECT> PADD
+      W-FLAGS WF-SUBTREE AND IF S" WatchSubtree" PADD THEN
+      0x00000004 S" WATCH-CHANGE-ATTRIBUTES" (WDR)
+      0x00000002 S" WATCH-CHANGE-DIR-NAME" (WDR)
+      0x00000001 S" WATCH-CHANGE-FILE-NAME" (WDR)
+      0x00000010 S" WATCH-CHANGE-LAST-WRITE" (WDR)
+      0x00000100 S" WATCH-CHANGE-SECURITY" (WDR)
+      0x00000008 S" WATCH-CHANGE-SIZE" (WDR)
+    THEN
+;
+
+: WReg ( -- )
+    W-STOP ['] WATCH-REG-STOP =
+    IF
+      S" WatchRegistryKey: " +PAD W-OBJECT> PADD
+      W-FLAGS WF-SUBTREE AND IF S" WatchSubtree" PADD THEN
+      2 S" REG-CHANGE-ATTRIBUTES" (WDR)
+      1 S" REG-CHANGE-NAME" (WDR)
+      4 S" REG-CHANGE-LAST-SET" (WDR)
+      8 S" REG-CHANGE-SECURITY" (WDR)
+    THEN
+;
+
+: WCPU ( -- )
+    W-STOP ['] WATCH-CPUUSAGE-STOP =
+    IF
+      S" WatchCPUUsage: " +PAD
+      W-OBJECT ?DUP IF DUP
+      ->CLASS ExceedCPUUsageObject vMax @ N>S +PAD S"  " +PAD
+      ->CLASS ExceedCPUUsageObject vExceedTime @ 1000 / N>S PADD
+      ELSE S" no data" PADD THEN
+    THEN
+;
+
+: TASK-INFO-WATCH ( -- )
+    CURNODE CRON-WATCH @ ?DUP
+    IF
+      BEGIN ?DUP WHILE
+      GET-PAR
+      WHotKey
+      WClipboard
+      WDrive
+      WWin
+      WProc
+      WOff
+      WPow
+      WWTS
+      WConnect
+      WEvent
+      WFile
+      WDir
+      WReg
+      WCPU
+      WATCH-NEXT @
+      REPEAT
+    THEN
+;
+
+: TASK-INFO-FILENAME ( -- )
+\    CRLF +PAD
+    S" File: " +PAD
+    CURNODE CRON-FILENAME @ COUNT PADD
+;
+
+: TASK-INFO-NAME ( -- )
+    CRLF +PAD
+    S" Task: " +PAD
+    CURNODE CRON-NAME @ COUNT PADD
+;
+
+: TASK-INFO-RULE ( -- )
+    CURNODE CRON-RULE @ IF S" Rule: yes" ELSE S" Rule: no" THEN PADD
+; \ Условие компилируется как :NONAME. В виде строки не хранится в памяти.
+
+: TASK-INFO-LASTTIME ( -- )
+    CURNODE SP@ TASK-LAUNCH-TIME
+    IF FT>DD.MM.YYYY/hh:mm:ss ELSE S" none" THEN
+    S" Last start: " +PAD PADD DROP
+;
+
+
+: TASK-INFO-ASSUMEDPREVTIME ( -- )
+    CURNODE ACTIVE? IF
+    CURNODE SP@ TASK-ASSUMED-PREV-TIME
+    IF FT>DD.MM.YYYY/hh:mm:ss ELSE S" none" THEN
+    S" Prev time: " +PAD PADD DROP
+    THEN
+;
+
+: TASK-INFO-ASSUMEDNEXTTIME ( -- )
+    CURNODE ACTIVE? IF
+    CURNODE SP@ TASK-ASSUMED-NEXT-TIME
+    IF FT>DD.MM.YYYY/hh:mm:ss ELSE S" none" THEN
+    S" Next time: " +PAD PADD DROP
+    THEN
+;
+
+: TASK-INFO-EXECUTING ( -- )
+    CURNODE CRON-COUNTER @ ?DUP \ счётчик экземпляров
+    IF N>S S" Running: " +PAD PADD THEN
+;
+
+: TASK-INFO-GET ( -- )
+    TASK-INFO-NAME
+    TASK-INFO-FILENAME
+    TASK-INFO-OPTIONS
+    TASK-INFO-AUTHORIZATION
+    TASK-INFO-TIME
+    TASK-INFO-WATCH
+    TASK-INFO-RULE
+    TASK-INFO-LASTTIME
+    TASK-INFO-ASSUMEDPREVTIME
+    TASK-INFO-ASSUMEDNEXTTIME
+    TASK-INFO-EXECUTING
+;
+
+VARIABLE TskLst
+VARIABLE tisize
+VARIABLE <xt>
+
+: get-ti NodeValue TO CURNODE PAD OFF <xt> @ EXECUTE PAD> tisize +! DROP ;
+
+: (FOR-TASKS) ( xt -- )
+    <xt> !
+    tisize OFF
+    CRON-LIST
+    BEGIN @ ?DUP WHILE
+    DUP TskLst AddNode
+    REPEAT
+    ['] get-ti TskLst DoList
+    TskLst FreeList
+;
+
+: FOR-TASKS ( -- )
+    POSTPONE [NONAME
+; IMMEDIATE
+
+: ;FOR-TASKS
+    POSTPONE NONAME]
+    POSTPONE (FOR-TASKS)
+; IMMEDIATE
+
+EXPORT
+
+: TASK-INFO ( task -- a u )
+    @ TO CURNODE
+    PAD OFF
+    TASK-INFO-GET
+    PAD>
+;
+
+: TASK-INFO-ALL ( -- a u )
+    tisize 256 + TEMP-ALLOC <TASKINFO> !
+    FOR-TASKS
+      TASK-INFO-GET
+      PAD> <TASKINFO> @ +ZPLACE
+    ;FOR-TASKS
+    <TASKINFO> @ ASCIIZ>
+;
+
+
+;MODULE
+
+
