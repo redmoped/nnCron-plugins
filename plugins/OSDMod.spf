@@ -1,0 +1,115 @@
+\ Файл:       OSDMod.spf
+\ Автор:      dMitry Alexandrow, Nicholas Nemtsev, dothen
+\ Дата:       30.11.2019
+\ Версия:     1.0
+\ Описание:   Это модифицированный плагин osd.spf http://www.nncron.ru/download/plugins/osd.spf
+\             Теперь может показывать многострочный текст.
+\ Usage: 
+\   OSD-FONT: "Arial" 50 0x0000FF00 
+\      ("Arial" - font name; 50 - size; 0x0000FF00 - color) 
+\   OSD-POS:  400 200 
+\      (400 - horizontal; 200 - vertical) 
+\   OSD: "Hi! Now %hh%:%mm%!" 2000 
+\      (2000 - time in msec to show message) 
+\   S" Hi! Now %hh%:%mm%!" EVAL-SUBST OSD 2000 PAUSE OSD-CLEAR 
+\      (Same as above, but for advanced users) 
+
+\   here are some color examples:
+\   0x000000 - black
+\   0xFFFFFF - white
+\   0xFF0000 - red
+\   0x00FF00 - green (default color)
+\   0x0000FF - blue
+\   0xFFFF00 - yellow
+\ ################################################### 
+
+WINAPI: GetWindowDC      user32.dll 
+WINAPI: GetDesktopWindow user32.dll 
+WINAPI: ReleaseDC      user32.dll 
+WINAPI: RedrawWindow      user32.dll 
+WINAPI: TextOutA      gdi32.dll 
+WINAPI: SetBkMode      gdi32.dll 
+WINAPI: SetTextColor      gdi32.dll 
+WINAPI: SelectObject      gdi32.dll 
+WINAPI: CreateFontA      gdi32.dll 
+WINAPI: DeleteObject gdi32.dll
+
+USER-VALUE   osd-x 
+USER-VALUE   osd-y 
+USER-VALUE   osd-size 
+USER-VALUE   osd-color 
+USER-VALUE   osd-font 
+
+USER-VALUE osd-dc
+USER-VALUE osd-line
+USER-VALUE osd-deffont
+USER-VALUE osd-newfont
+
+: NextLine ( -- a u ? ) 
+    10 SKIP 13 PARSE DUP ?DUP 0= 
+    IF EndOfChunk 0= THEN
+;
+
+: OSD-OUT ( a u -- )
+    <TIB
+      0 TO osd-line
+      BEGIN NextLine WHILE
+        SWAP
+        osd-line osd-size * osd-y +
+        osd-x osd-dc TextOutA DROP
+        osd-line 1+ TO osd-line
+      REPEAT
+      2DROP
+    TIB>
+;
+
+: ?OSD-INIT 
+    osd-font 0= 
+   IF 
+       64 ALLOCATE THROW TO osd-font 
+\      100 TO osd-x 
+\      50 TO osd-y 
+      50 TO osd-size 
+      0x0000FF00 TO osd-color 
+      S" Arial" osd-font ZPLACE 
+   THEN 
+;    
+
+: OSD ( a u -- )
+    ?OSD-INIT
+    GetDesktopWindow GetWindowDC TO osd-dc
+    1 osd-dc SetBkMode DROP
+    osd-color osd-dc SetTextColor DROP
+    osd-font 0 0 0 0 1 0 0 0 0 0 0 0 osd-size CreateFontA TO osd-newfont
+    osd-newfont osd-dc SelectObject TO osd-deffont
+    OSD-OUT
+    osd-deffont osd-dc SelectObject DROP
+    osd-newfont DeleteObject DROP
+    osd-dc GetDesktopWindow ReleaseDC DROP
+;
+
+: OSD-CLEAR ( -- ) 
+   133 0 0 GetDesktopWindow RedrawWindow DROP 
+; 
+
+: OSD-PAUSED ( a u n -- ) >R OSD R> PAUSE OSD-CLEAR ; 
+
+: OSD-POS ( x y -- ) TO osd-y TO osd-x ; 
+
+: BGR>RGB ( n -- n1) 
+   SP@ C@ >R 
+   SP@ DUP 2+ C@ SWAP C! 
+   SP@ R> SWAP 2+ C! 
+;
+
+: OSD-FONT ( a u nsize nclr -- ) 
+   ?OSD-INIT 
+   BGR>RGB TO osd-color 
+   TO osd-size 
+   63 MIN osd-font ZPLACE 
+; 
+
+: OSD: eval-string, number, POSTPONE OSD-PAUSED ; IMMEDIATE 
+: OSD-POS: number, number, POSTPONE  OSD-POS ; IMMEDIATE 
+: OSD-FONT: eval-string, number, number, POSTPONE OSD-FONT ; IMMEDIATE 
+
