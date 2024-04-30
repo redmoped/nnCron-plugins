@@ -1,0 +1,74 @@
+\ Файл:       KBDLayout.spf
+\ Автор:      dothen
+\ Дата:       23.04.2020
+\ Версия:     1.01
+\ Описание: Определяет текущую раскладку клавиатуры для указанного окна.
+\ Слова из плагина kbd_layout.spf CUR-KBLT WIN-KBLT ARA? и т.д. теперь работают и для консольных окон.
+\ Можно сразу получить буквенное обозначение раскладки клавиатуры (как в языковой панели) для большинства языков.
+
+\ В папке plugins должен лежать плагин kbd_layout.spf.
+\ http://www.nncron.ru/download/plugins/kbd_layout.spf
+
+\ New words:    CONSOLE-KBLT ( hwnd -- n )
+\               GUI-KBLT ( hwnd -- n )
+\               GETKBLTNAME ( n -- a u ) \ RU EN DE ...
+
+\ Example:    CUR-KBLT GETKBLTNAME MsgBox
+\ ---------------------------------------
+
+REQUIRE WIN-KBLT plugins\kbd_layout.spf
+
+WINAPI: FreeConsole Kernel32.dll
+WINAPI: AttachConsole Kernel32.dll
+WINAPI: GetConsoleKeyboardLayoutNameA Kernel32.dll
+\ WINAPI: GetClassNameA User32.dll
+
+\ "Процесс может быть присоединен к одной консоли.
+\ Если вызывающий процесс уже присоединен к консоли,
+\ AttachConsole завершается с ошибкой ERROR_ACCESS_DENIED."
+\ Т.е. если в nnCron запущена локальная консоль, тогда будет ошибка.
+\ Если в nnCron запущена удаленная консоль или нет консоли, тогда нет ошибки.
+: CONSOLE-KBLT ( hwnd -- n )
+    [ ModuleName ONLYNAME S" nncron.exe" COMPARE 0= ] \ Если nncron.exe то добавляем проверку если tm.exe то нет.
+    [IF] Z" nnCron console" Z" ConsoleWindowClass" FindWindowA IF S" Error CONSOLE-KBLT, Local console barrier!" CRON-LOG DROP 1024 EXIT THEN [THEN]
+    >R 0 SP@ R> GetWindowThreadProcessId DROP
+    AttachConsole DROP
+    PAD GetConsoleKeyboardLayoutNameA DROP
+    FreeConsole DROP
+    PAD ASCIIZ> BASE @ >R HEX S>NUM R> BASE !
+;
+
+: GUI-KBLT ( hwnd -- n )
+  0 SWAP GetWindowThreadProcessId GetKeyboardLayout
+  0xFFFF AND
+;
+
+: WINCONSOLE? ( hwnd -- ? )
+    256 PAD ROT GetClassNameA PAD SWAP
+    S" ConsoleWindowClass" COMPARE 0=
+;
+
+\ Хак: В скомпилированное слово WIN-KBLT (kbd_layout.spf) вставляем переход на новое слово.
+:NONAME ( hwnd -- n )
+    DUP WINCONSOLE?
+    IF
+      CONSOLE-KBLT
+    ELSE
+      GUI-KBLT
+    THEN
+;
+
+' WIN-KBLT JMP
+
+
+CREATE KBLTNAMES
+C" $$ARBGCAZHCSDADEELENESFIFRHEHUISITJAKONLNBPLPTRMRORUHRSKSQSVTHTRURIDUKBESLETLVLTTGFAVIHYAZEU$$MK$$$$TN$$XHZUAFKAFOHIMTSE$$$$MSKKKYSWTKUZTT$$"
+COUNT SZ",
+\ Там понятнее... http://autoit-script.ru/autoit3_docs/appendix/OSLangCodes.htm
+
+VARIABLE kbltname
+
+: GETKBLTNAME ( n -- a u )
+    1093 MIN 1024 MAX 1024 - 2* KBLTNAMES + W@ kbltname W! kbltname 2
+;
+
