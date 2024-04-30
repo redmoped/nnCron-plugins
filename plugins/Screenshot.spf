@@ -1,0 +1,515 @@
+\ Файл:       Screenshot.spf
+\ Автор:      dothen
+\ Дата:       28.04.2017
+\ Версия:     1.0
+\ Описание:
+\ Делает снимок экрана, окна или прямоугольника, и сохраняет изображение в файл в формате BMP, GIF, PNG, JPG, TIFF.
+
+\ Подключить плагин extwords.spf
+
+\ Опции:
+\ ActivateWindow    - Активизировать окно перед тем как сделать снимок. По умолчанию нет.
+\ EnableCursor      - Включает в снимок курсор мыши. По умолчанию нет.
+\ EnableTransparent - Включает в снимок полупрозрачные окна, расположенные поверх снимаемого окна. По умолчанию нет. Не участвует в методе FullWindowMethod.
+
+\ Снимок можно делать одним из трех методов: (По умолчанию ClipWindowMethod)
+\ SizeWindowMethod - Метод без отсечения. Часть окна, которая выходит за пределы экрана, будет закрашена черным цветом.
+\ ClipWindowMethod - Метод с отсечением по границам рабочего стола, или всего экрана если окно TOPMOST.
+\ FullWindowMethod - Метод делает снимок целого окна даже если оно перекрыто другими окнами или находится за пределами экрана.
+
+\ Если снимаемое окно полупрозрачное то метод SizeWindowMethod делает снимок целого окна или любого дочернего окна,
+\ даже если оно перекрыто другими окнами или находится за пределами экрана.
+\ ----------------------
+
+\ SCREENSHOT ( hwnd -- )
+\ Сохранить скриншот указанного окна в файл заданный в настройках.
+
+\ SCREENSHOT-WINDOW ( -- )
+\ Сохранить скриншот активного окна в файл заданный в настройках.
+
+\ SCREENSHOT-DESKTOP ( -- )
+\ Сохранить скриншот экрана в файл заданный в настройках.
+
+\ SCREENSHOT-FROM-POINT ( -- )
+\ Сохранить скриншот окна под курсором в файл заданный в настройках.
+
+\ SCREENSHOT-FROM-CLIPBOARD ( -- )
+\ Сохранить скриншот окна, идентификатор которого находится в буфере обмена.
+
+\ (SCREENSHOT) ( hwnd addr-fname -- )
+\ Сохранить скриншот указанного окна в указанный файл.
+
+\ SCREENSHOT-RECT ( x y width height hwnd addr-fname -- )
+\ Сохранить скриншот указанного прямоугольника указанного окна в указанный файл (координаты относительные).
+
+\ SCREENSHOT# ( x y width height -- )
+\ Сохранить скриншот указанного прямоугольника активного окна в файл заданный в настройках.
+
+\ MULTISCREENSHOT  ( sum msec hwnd addr-fname -- )
+\ MULTI-SCREENSHOT ( sum msec hwnd -- )
+\ Съемка серии скриншотов с коротким интервалом между снимками. Метод FullWindowMethod в MULTI-SCREENSHOT работает нестабильно.
+\ sum  - Количество снимков.
+\ msec - Пауза в миллисекундах после каждого снимка.
+\ hwnd - Дескриптор окна.
+\ addr-fname - Адрес строки с полным именем файла. Файлы с одинаковыми именами перезаписываются (поэтому EVAL-SUBST делается внутри слова).
+
+
+\ ScreenshotFileName: "filename"
+\ MultiScreenshotFileName: "filename"
+\ Задает имя файла для скриншота и мультискриншота.
+\ Снимок можно сохранить в формате: bmp, gif, png, jpg, tiff.
+\ Если указать другое или никакое расширение то по умолчанию png.
+
+\ xhwnd  ( -- a u ) \ Дескриптор окна для добавления в имя файла.
+\ WinTxt ( -- a u ) \ Заголовок окна для добавления в имя файла.
+
+\ MultiMax - константа устанавливает максимальное число снимков в серийной съемке (по умолчанию 100, можно менять).
+\ ------------------------
+
+
+WINAPI: DeleteDC GDI32.DLL
+WINAPI: CreateCompatibleDC GDI32.DLL
+WINAPI: CreateCompatibleBitmap GDI32.DLL
+WINAPI: BitBlt GDI32.DLL
+WINAPI: PrintWindow USER32.DLL
+WINAPI: GetShellWindow USER32.DLL
+WINAPI: IntersectRect USER32.DLL
+\ WINAPI: CopyImage USER32.DLL
+
+WINAPI: GdiplusStartup GDIPLUS.DLL
+WINAPI: GdipCreateBitmapFromHBITMAP GDIPLUS.DLL
+WINAPI: GdipSaveImageToFile GDIPLUS.DLL
+WINAPI: GdipDisposeImage GDIPLUS.DLL
+WINAPI: GdiplusShutdown GDIPLUS.DLL
+
+0 VALUE ScreenshotFileName      \ Адрес строки с именем файла.
+0 VALUE MultiScreenshotFileName \ Адрес строки с именем файла.
+\ В имя файла надо добавлять время с миллисекундами или %GetTickCount% иначе имена могут совпадать с предыдущими снимками и фалы будут перезаписываться.
+
+100 CONSTANT MultiMax \ Максимальное число снимков в серийной съемке (можно менять).
+USER-VALUE WinHwnd \ Дескриптор окна.
+
+USER-VALUE ScreenshotMethod   \ 1 или 0 или -1. По умолчанию 0.
+USER-VALUE ActivateWindow?    \ Флаг. Если TRUE то активизировать окно перед тем как сделать снимок. По умолчанию FALSE.
+USER-VALUE EnableCursor?      \ Флаг. Если TRUE то включает в снимок курсор мыши. По умолчанию FALSE.
+USER-VALUE EnableTransparent? \ Флаг. Если TRUE то включает в снимок полупрозрачные окна, расположенные поверх снимаемого окна (функция BitBlt применяет растровую операцию CAPTUREBLT). По умолчанию FALSE.
+
+: SizeWindowMethod ( -- ) -1 TO ScreenshotMethod ; \ Метод без отсечения.
+: ClipWindowMethod ( -- )  0 TO ScreenshotMethod ; \ Метод с отсечением по границам рабочего стола или всего экрана если окно TOPMOST.
+: FullWindowMethod ( -- )  1 TO ScreenshotMethod ; \ Метод делает снимок целого окна даже если оно перекрыто другими окнами или находится за пределами экрана.
+
+: ActivateWindow    ( -- ) TRUE TO ActivateWindow? ;
+: EnableCursor      ( -- ) TRUE TO EnableCursor? ;
+: EnableTransparent ( -- ) TRUE TO EnableTransparent? ;
+
+
+\ Создает каталог и все промежуточные подкаталоги, если это необходимо.
+: DirCreate ( addr-fname -- )
+    ASCIIZ> ONLYDIR EVAL-SUBST 2DUP
+    EXIST? IF 2DROP ELSE DIR-CREATE THEN
+;
+
+: WinExist? ( hwnd -- ? )
+    DUP IF IsWindow THEN DUP
+    IFNOT
+      S" Error: Недействительный дескриптор окна" ?CRON-LOG
+    THEN
+;
+
+: RectSizeValid? ( b r y x -- ? )
+    ROT = -ROT = OR DUP
+    IF
+      S" WARNING: Высота или ширина окна (прямоугольника) равна нулю." ?CRON-LOG
+    THEN
+    0=
+;
+
+\ Получить прямоугольник который является пересечением двух заданных прямоугольников.
+\ Если прямоугольники не пересекаются то возвращает пустой прямоугольник.
+: INTERSECT-RECT ( b1 r1 y1 x1 b2 r2 y2 x2 -- b3 r3 y3 x3 )
+  { b1 r1 y1 x1 b2 r2 y2 x2 -- b3 r3 y3 x3 }
+    0 0 0 0 SP@
+    AT x1 AT x2 ROT IntersectRect
+    IFNOT
+      S" WARNING: Окно вне рабочего стола (прямоугольник вне окна)." ?CRON-LOG
+    THEN
+;
+\ : INTERSECT-RECT1 ( b1 r1 y1 x1 b2 r2 y2 x2 -- b3 r3 y3 x3 )
+\  { b1 r1 y1 x1 b2 r2 y2 x2 -- b3 r3 y3 x3 }
+\    x1 r2 <
+\    y1 b2 < AND
+\    r1 x2 > AND
+\    b1 y2 > AND
+\    IF
+\      x1 x2 MAX >R
+\      y1 y2 MAX >R
+\      r1 r2 MIN >R
+\      b1 b2 MIN R> R> R>
+\    ELSE
+\      S" WARNING: Окно вне рабочего стола (прямоугольник вне окна)." ?CRON-LOG
+\      0 0 0 0
+\    THEN
+\ ;
+
+\ Устанавливает прямоугольник отсечения:
+\ Весь рабочий стол - если выбран Рабочий стол, Панель задач или TOPMOST оконо.
+\ Рабочий стол минус Панель задач - для всех остальных окон.
+\ Т.е. на снимке будет та часть окна которая находится на рабочем столе и не перекрыта панелью задач.
+: GetDesktopWorkRect ( hwnd -- b r y x )
+    DUP >R TOPMOST?                         \ Окно Поверх всех окон?
+    R@ GetDesktopWindow = OR                \ или это Рабочий стол?
+\   R> 0 Z" Shell_TrayWnd" FindWindowA = OR \ или это Панель задач?
+    R> TOP-PARENT-WINDOW GET-WCLASS
+    S" Shell_TrayWnd" COMPARE 0= OR \ Панель задач или её дочернее окно.
+    IF
+      GetDesktopWindow WIN-RECT
+    ELSE
+\      GetWorkArea
+      0 0 0 0 SP@ 0 SWAP 0 48 SystemParametersInfoA DROP \ #define SPI_GETWORKAREA 48
+    THEN
+;
+
+\ Получить прямоугольник пересечения окна с рабочим столом.
+\ Если окно с таким hwnd не существует или всё окно вне рабочего стола,
+\ то слово вернет нулевые координаты, и будет сделан снимок окна нулевого размера.
+: DesktopIntersectRect ( hwnd -- b r y x )
+    DUP >R GetDesktopWorkRect  \ ( -- b1 r1 y1 x1 )
+    R> WIN-RECT                \ ( -- b1 r1 y1 x1 b2 r2 y2 x2 )
+    INTERSECT-RECT
+;
+\ Размеры развернутого окна больше чем размеры WORKAREA на толщину рамок.
+
+\ Если дескриптор окна = Desktop или Progman то установить метод ClipWindowMethod.
+: ScreenShotSetValidMethod ( hwnd -- )
+    DUP GetDesktopWindow =
+    OVER GetShellWindow = OR
+    SWAP GET-WCLASS S" WorkerW" COMPARE 0= OR
+    IF 0 TO ScreenshotMethod THEN
+
+    ScreenshotMethod ABS 1 >
+    IF
+      0 TO ScreenshotMethod
+      S" WARNING: ScreenshotMethod должен быть равен 1, 0 или -1" ?CRON-LOG
+    THEN
+;
+
+\ Получить координаты окна относительно самого себя.
+: RELWINRECT ( hwnd -- height width 0 0 ) WIN-RECT ROT SWAP - -ROT - SWAP 0 0 ;
+
+
+\ -------------GDI+-------------
+\ С помощью GDI+ будем записывать изображение в файл в нужном формате.
+\ Инициализирует библиотеку GDI+
+: GDIPLUS-STARTUP ( -- GpToken ? )
+   0 SP@ >R    \ GpToken
+   0 0 0 1 SP@ \ Структура GdiplusStartupInput
+   0 SWAP R> GdiplusStartup DUP >R
+   IF S" Error GdiplusStartup" ?CRON-LOG THEN
+   2DROP 2DROP \ Удалить структуру GdiplusStartupInput
+   R>
+;
+
+\ Расширение для SCASE(строковый CASE) из плагина extwords.spf
+\ Поддерживает работу с масками используя символы * и ?
+: wcSOF ( a1 u1 a2-pat u2-pat -- )
+    POSTPONE 2OVER POSTPONE 2SWAP POSTPONE WC-COMPARE
+    [COMPILE] IF POSTPONE 2DROP
+; IMMEDIATE
+
+\ Выбрать CLSID по расширению файла.
+\ (Microsoft предупреждает, что ClsID кодеков могут отличаться в различных версиях библиотеки GDI+.
+\ Функции GdipGetImageEncodersSize и GdipGetImageEncoders, позволяют получить ClsID кодека.)
+\ Ну, когда станут отличаться, тогда сделаем с функциями, а пока вот так.
+: GetCLSID ( addr-fname -- n n n n )
+    >R
+    0x2EF31EF8 0x0000739A 0x11D31A04 0x557CF400    \ clsidEncoder BMP
+    R> ASCIIZ>
+    SCASE
+      S" *.bmp"  wcSOF NOOP ENDSOF \ {557CF400-1A04-11D3-9A73-0000F81EF32E}
+      S" *.jpg"  wcSOF 1 +  ENDSOF \ {557CF401-1A04-11D3-9A73-0000F81EF32E}
+      S" *.jpeg" wcSOF 1 +  ENDSOF \ {557CF401-1A04-11D3-9A73-0000F81EF32E}
+      S" *.gif"  wcSOF 2 +  ENDSOF \ {557CF402-1A04-11D3-9A73-0000F81EF32E}
+      S" *.tiff" wcSOF 5 +  ENDSOF \ {557CF405-1A04-11D3-9A73-0000F81EF32E}
+      S" *.png"  wcSOF 6 +  ENDSOF \ {557CF406-1A04-11D3-9A73-0000F81EF32E}
+      S" *"      wcSOF 6 +  ENDSOF
+    ENDSCASE
+;
+
+\ Сохранить снимок в файл.
+: BITMAP2FILE ( hBitmap addr-fname -- )
+  { hBitmap file \ GpToken GpBitmap &4 &3 &2 clsid -- }
+
+    GDIPLUS-STARTUP IF DROP EXIT ELSE TO GpToken THEN
+
+    file GetCLSID TO clsid TO &2 TO &3 TO &4
+    file ASCIIZ> S>UNICODE DROP TO file
+
+    AT GpBitmap 0 hBitmap GdipCreateBitmapFromHBITMAP DROP
+    0 AT clsid file GpBitmap GdipSaveImageToFile IF S" Error GdipSaveImageToFile" ?CRON-LOG THEN
+    GpBitmap GdipDisposeImage DROP
+    GpToken GdiplusShutdown DROP \ Выгружаем библиатеку gdi+
+    file FREE DROP \ Освободить память от S>UNICODE
+;
+
+
+\ ------------Курсор------------
+WINAPI: GetCursorInfo USER32.DLL
+WINAPI: GetIconInfo USER32.DLL
+WINAPI: DrawIcon USER32.DLL
+
+\ Получить дескриптор основного курсора.
+: GET-CURSOR ( -- hCursor )
+    0 0 0 1 20 SP@ GetCursorInfo DROP 2DROP NIP NIP
+;
+\ Функция GetCursor извлекает дескриптор текущего курсора который принадлежит вызывающему потоку, а нам нужен основной курсор.
+
+\ Координаты острия(фокуса) курсора на точечном рисунке курсора, относительно левого верхнего угла рисунка курсора.
+: HOTSPOT-CURSOR ( -- y x )
+    0 0 0 0 0 SP@ GET-CURSOR GetIconInfo 2DROP 2SWAP
+    DeleteObject DROP DeleteObject DROP
+;
+
+\ Координаты точечного рисунка курсора мыши относительно левого верхнего угла окна.
+: CURSOR-POS ( hwnd -- y x )
+    ScreenshotMethod 0<>
+    IF WIN-POS ELSE DesktopIntersectRect 2SWAP 2DROP SWAP THEN
+    MOUSE-POS ROT - >R SWAP - R> SWAP \ Координаты острия курсора относительно левого верхнего угла окна.
+    HOTSPOT-CURSOR ROT SWAP - >R - R>
+;
+
+WINAPI: PtInRect USER32.DLL
+
+\ Определяем, находится ли курсор внутри заданного прямоугольника.
+: MOUSE-INRECT? { b r y x -- ? } MOUSE-POS SWAP AT x PtInRect 0<> ;
+
+\ Рисовать курсор.
+: DRAW-CURSOR { newDC hwnd -- }
+    EnableCursor?
+    IF
+      hwnd WIN-RECT MOUSE-INRECT? ScreenshotMethod -1 = AND
+      hwnd DesktopIntersectRect MOUSE-INRECT? ScreenshotMethod 1 <> AND OR
+      WIN-FROM-POINT TOP-PARENT-WINDOW hwnd = ScreenshotMethod 1 = AND OR
+      IF GET-CURSOR hwnd CURSOR-POS newDC DrawIcon DROP THEN
+    THEN
+;
+
+
+\ ------------------------------
+\ Проверяет корректность заданных координат прямоугольника.
+\ Оставляет на стеке координаты и TRUE или только FALSE
+: RECT-CORRECT? { x y width height hwnd -- height width y x true | false }
+
+    hwnd WinExist? IFNOT FALSE EXIT THEN
+    hwnd WIN-RECT RectSizeValid? IFNOT FALSE EXIT THEN
+    x y MIN 0< IF S" Error: x и y прямоугольника не должны быть меньше нуля." ?CRON-LOG FALSE EXIT THEN
+    width height MIN 1 < IF S" Error: Ширина и высота прямоугольника должны быть больше нуля." ?CRON-LOG FALSE EXIT THEN
+
+\ Если даны координаты отдельного участка окна, то сначала вычисляем его пересечение с указанным окном (участок может выйти за пределы окна).
+\ Если даны координаты целого окна то пересечение - целое окно.
+    hwnd RELWINRECT
+    y height + x width + y x
+    INTERSECT-RECT
+    TO x   TO y   x - TO width    y - TO height
+
+    hwnd ScreenShotSetValidMethod
+
+\ Если метод = 0 то вычисляем пересечение рабочего стола и найденного пересечения.
+    ScreenshotMethod
+    IFNOT
+      hwnd GetDesktopWorkRect
+      hwnd WIN-POS y + TO y x + TO x
+      y height + x width + y x
+      INTERSECT-RECT
+      TO x   TO y   x - TO width    y - TO height \ Прямоугольник пересечения (координаты относительно DesktopWorkRect).
+      hwnd WIN-POS
+      y SWAP - TO y \ Вычисляем координаты x и y относительно окна.
+      x SWAP - TO x
+    THEN
+    y height + x width + y x RectSizeValid? IFNOT FALSE EXIT THEN
+
+    height width y x TRUE
+;
+
+\ Сохранить скриншот указанного прямоугольника в указанный файл (координаты относительно hwnd).
+\ В методе FullWindowMethod, ширина и высота участка всегда отсчитывается от левого верхнего угла окна (так работает функция PrintWindow).
+\ Пример: FullWindowMethod 100 100 200 200 SCREENSHOT#
+: SCREENSHOT-RECT ( x y width height hwnd addr-fname -- )
+  { x y width height hwnd file \ winDC newDC hBitmap defObject -- }
+
+    hwnd TO WinHwnd \ WinHwnd используется при формировании имени файла, если в имя файла добавляется дескриптор окна (слово xhwnd) или заголовок окна (слово WinTxt).
+    x y width height hwnd RECT-CORRECT?
+    IF TO x TO y TO width TO height ELSE EXIT THEN
+
+    hwnd GetWindowDC TO winDC
+    winDC CreateCompatibleDC TO newDC
+    height width winDC CreateCompatibleBitmap TO hBitmap
+    hBitmap newDC SelectObject TO defObject
+
+    ScreenshotMethod 0>
+    IF
+      0 newDC hwnd PrintWindow DROP \ #define PW_CLIENTONLY 0x00000001
+    ELSE
+      EnableTransparent? 0x40000000 AND 0x00CC0020 OR y x winDC height width 0 0 newDC BitBlt DROP \ #define SRCCOPY 0xCC0020  #define CAPTUREBLT 0x40000000 Включает в снимок полупрозрачные окна, расположенные поверх снимаемого окна.
+    THEN
+
+    newDC hwnd DRAW-CURSOR
+
+    hBitmap file BITMAP2FILE
+
+    defObject newDC SelectObject DROP
+    hBitmap DeleteObject DROP
+    newDC DeleteDC DROP
+    winDC hwnd ReleaseDC DROP
+;
+
+\ Съемка серии скриншотов с коротким интервалом между снимками. PrintWindow в MULTI-SCREENSHOT работает нестабильно.
+\ sum  - Количество снимков.
+\ msec - Пауза в миллисекундах после каждого снимка.
+\ hwnd - Дескриптор окна.
+\ addr-fname - Адрес строки с полным именем файла. Файлы с одинаковыми именами перезаписываются.
+: MULTISCREENSHOT ( sum msec hwnd addr-fname -- )
+  { sum msec hwnd file \ x y width height winDC newDC hBitmap defObject GpToken GpBitmap &4 &3 &2 clsid -- }
+
+    sum ABS MultiMax MIN TO sum
+    hwnd TO WinHwnd \ WinHwnd используется при формировании имени файла, если в имя файла добавляется дескриптор окна (слово xhwnd) или заголовок окна (слово WinTxt).
+    hwnd WinExist? IFNOT EXIT THEN
+    hwnd WIN-RECT RectSizeValid? IFNOT EXIT THEN
+    file DirCreate
+
+    GDIPLUS-STARTUP IF DROP EXIT ELSE TO GpToken THEN
+    file GetCLSID TO clsid TO &2 TO &3 TO &4
+
+    hwnd GetWindowDC TO winDC
+    winDC CreateCompatibleDC TO newDC
+
+    hwnd GetDesktopWorkRect  \ ( b1 r1 y1 x1 --  )
+
+    BEGIN hwnd WinExist? sum 0> AND WHILE \ Если окно закроется во время цикла.
+      sum 1- TO sum
+      2OVER 2OVER    \ ( b1 r1 y1 x1 b1 r1 y1 x1 --  )
+      hwnd WIN-RECT  \ ( b1 r1 y1 x1 b1 r1 y1 x1 b2 r2 y2 x2 --  )
+      2DUP >R >R
+      INTERSECT-RECT \ ( b1 r1 y1 x1 b3 r3 y3 x3 --  )
+
+  ScreenshotMethod IF 2DROP 2DROP hwnd WIN-RECT THEN
+
+      TO x    TO y    x - TO width    y - TO height  \ ( b1 r1 y1 x1 --  )
+      R> R>
+      x SWAP - 0 MAX TO x
+      y SWAP - 0 MAX TO y
+
+      height width winDC CreateCompatibleBitmap TO hBitmap
+      hBitmap newDC SelectObject TO defObject
+
+  ScreenshotMethod
+  IF
+    0 newDC hwnd PrintWindow DROP \ PrintWindow в MULTI-SCREENSHOT работает нестабильно.
+  ELSE
+    EnableTransparent? 0x40000000 AND 0x00CC0020 OR y x winDC height width 0 0 newDC BitBlt DROP \ #define SRCCOPY 0xCC0020  #define CAPTUREBLT 0x40000000 Включает в снимок полупрозрачные окна, расположенные поверх снимаемого окна.
+  THEN
+
+  newDC hwnd DRAW-CURSOR
+
+      file ASCIIZ> EVAL-SUBST S>UNICODE DROP >R
+      AT GpBitmap 0 hBitmap GdipCreateBitmapFromHBITMAP DROP
+      0 AT clsid R@ GpBitmap GdipSaveImageToFile IF S" Error GdipSaveImageToFile" ?CRON-LOG THEN
+
+      GpBitmap GdipDisposeImage DROP \ Освободить память
+      defObject newDC SelectObject DROP
+      hBitmap DeleteObject DROP \ Освободить память
+      R> FREE DROP \ Освободить память от S>UNICODE
+      msec PAUSE
+    REPEAT
+
+    2DROP 2DROP \ Удаляем из стека GetDesktopWorkRect
+    newDC DeleteDC DROP
+    winDC hwnd ReleaseDC DROP
+    AT GpToken GdiplusShutdown DROP \ Выгружаем библиотеку gdi+
+;
+
+\ Примеры:
+\ 10 100 GetDesktopWindow Z" d:\SCREENSHOT\image%GetTickCount%.png" MULTI-SCREENSHOT
+\ 10 100 WIN-FROM-POINT Z" d:\SCREENSHOT\image%GetTickCount%.gif" MULTI-SCREENSHOT
+\ EVAL-SUBST для имени файла делается внутри слова MULTI-SCREENSHOT
+
+
+\ Сохранить скриншот указанного окна в указанный файл.
+: (SCREENSHOT) ( hwnd addr-fname -- )
+    >R >R
+\    0 0 R@ WIN-SIZE R> R> SCREENSHOT-RECT
+    0 0 R@ WIN-RECT ROT SWAP - -ROT - R> R> SCREENSHOT-RECT
+;
+
+\ Сохранить скриншот указанного окна в файл заданный в настройках.
+: SCREENSHOT ( hwnd -- )
+    TO WinHwnd
+    ActivateWindow? IF WinHwnd WinActivate THEN
+    ScreenshotFileName COUNT EVAL-SUBST 2>R
+    2R@ ONLYDIR EXIST?
+    IFNOT
+      2R@ ONLYDIR DIR-CREATE
+    THEN
+    WinHwnd 2R> DROP (SCREENSHOT)
+;
+\ Размеры развернутого окна больше чем размеры WorkArea на толщину рамок.
+
+\ Сохранить скриншот экрана в файл заданный в настройках.
+: SCREENSHOT-DESKTOP ( -- )
+    GetDesktopWindow SCREENSHOT
+;
+
+\ Сохранить скриншот активного окна в файл заданный в настройках.
+: SCREENSHOT-WINDOW ( -- )
+    GetForegroundWindow SCREENSHOT
+;
+
+\ Сохранить скриншот окна под курсором в файл заданный в настройках.
+: SCREENSHOT-FROM-POINT ( -- )
+    WIN-FROM-POINT SCREENSHOT
+;
+
+\ Сохранить скриншот окна, идентификатор которого находится в буфере обмена.
+: SCREENSHOT-FROM-CLIPBOARD ( -- )
+    CLIPBOARD@ S>NUM
+    DUP WinExist? IF SCREENSHOT ELSE DROP THEN
+;
+
+\ Сохранить скриншот указанного прямоугольника активного окна в файл заданный в настройках.
+: SCREENSHOT# ( x y width height -- )
+    GetForegroundWindow TO WinHwnd
+\    GetDesktopWindow TO WinHwnd
+    ActivateWindow? IF WinHwnd WinActivate THEN
+    ScreenshotFileName COUNT EVAL-SUBST DROP >R
+    WinHwnd R> SCREENSHOT-RECT
+;
+
+\ Сохранить серию скриншотов указанного окна в файл(ы) заданный в настройках.
+: MULTI-SCREENSHOT ( sum msec hwnd -- )
+    MultiScreenshotFileName COUNT DROP
+    MULTISCREENSHOT
+;
+
+
+
+\ Дескриптор окна для добавления в имя файла.
+: xhwnd ( -- a u )
+    WinHwnd
+    BASE @ SWAP HEX
+    S>D <# # # # # # # # # S" 0x" HOLDS #>
+    ROT BASE !
+;
+
+\ Недопустимые символы в имени файла.
+SCONSTANT badchar \/:*?"<>|+ .%!@
+
+\ Заголовок окна для добавления в имя файла.
+: WinTxt ( -- a u )
+    WinHwnd GET-WTEXT 16 MIN \ Можно сделать длиннее или короче.
+    badchar NIP 0 DO badchar DROP I + C@ [CHAR] ^ CharReplace LOOP
+;
+
+
+: ScreenshotFileName:      ( "fname" -- ) C", TO ScreenshotFileName ;
+: MultiScreenshotFileName: ( "fname" -- ) C", TO MultiScreenshotFileName ;
+
+
