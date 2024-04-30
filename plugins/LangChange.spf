@@ -1,0 +1,122 @@
+\ Файл:       LangChange.spf
+\ Автор:      dothen
+\ Дата:       23.04.2020
+\ Версия:     1.0
+\ Описание: Переключает язык ввода.
+
+\ Переключение выполняется без эмуляции нажатия клавиш
+\ http://www.nncron.ru/forums/viewtopic.php?t=3699#p27975
+\ http://www.nncron.ru/forums/viewtopic.php?f=23&t=9476
+
+\ Words:
+\ (LNG-CHANGE) ( syschar hwnd -- ) \ Переключает указанный язык ввода для указанного окна.
+\ LNG-CHANGE ( syschar -- ) \ Переключает указанный язык ввода для активного окна.
+\ (LNG-NEXT) ( hwnd -- ) \ Переключает следующий язык ввода для указанного окна.
+\ LNG-NEXT ( -- ) \ Переключает следующий язык ввода для активного окна.
+
+\ Example:
+\ #( InputLangChange_EN \ Переключить язык на English двойным нажатием RCtrl
+\ SingleInstance NoLog
+\ WatchHotKey: "^"
+\ Action: 
+\    VK_RCONTROL WAIT-KEY-PRESSED
+\    IF
+\      ENU LNG-CHANGE
+\      S" Arial" 50 0x0000FF OSD-FONT
+\      550 380 OSD-POS S" ENGLISH" OSD
+\      100 PAUSE OSD-CLEAR
+\    THEN
+\ )#
+
+\ #( InputLangChange_RU \ Переключить язык на Russian двойным нажатием RShift
+\ SingleInstance NoLog
+\ WatchHotKey: "+"
+\ Action:
+\    VK_RSHIFT WAIT-KEY-PRESSED
+\    IF
+\      RUS LNG-CHANGE
+\      S" Arial" 50 0xFF0000 OSD-FONT
+\      550 380 OSD-POS S" RUSSIAN" OSD
+\      100 PAUSE OSD-CLEAR
+\    THEN
+\ )#
+
+\ mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
+
+0 \ typedef struct tagGUITHREADINFO {
+CELL -- gti.cbSize
+CELL -- gti.flags
+CELL -- gti.hwndActive
+CELL -- gti.hwndFocus
+CELL -- gti.hwndCapture
+CELL -- gti.hwndMenuOwner
+CELL -- gti.hwndMoveSize
+CELL -- gti.hwndCaret
+16 -- gti.rcCaret
+CONSTANT /GUITHREADINFO \ } GUITHREADINFO, *PGUITHREADINFO, *LPGUITHREADINFO;
+
+CREATE gti /GUITHREADINFO ALLOT
+ /GUITHREADINFO gti gti.cbSize !
+
+WINAPI: GetGUIThreadInfo user32.dll
+
+: WinConsole? ( hwnd -- ? )
+    256 PAD ROT GetClassNameA PAD SWAP
+    S" ConsoleWindowClass" COMPARE 0=
+;
+
+\ Возвращает ID потока который создал указанное окно.
+: Win-ThreadID ( hwnd -- thread-id )
+   >R 0 SP@ R> GetWindowThreadProcessId NIP
+;
+
+\ Если активно GUI окно, получаем дескриптор активного окна или его дочернего окна, которое имеет фокус клавиатуры.
+\ Если активно консольное окно тогда берём дескриптор консольного окна.
+: WIN-FOCUS ( -- hwnd )
+    GetForegroundWindow DUP
+    WinConsole? 0=
+    IF
+      gti SWAP Win-ThreadID GetGUIThreadInfo DROP
+      gti gti.hwndFocus @
+    THEN
+;
+
+0x0050 CONSTANT WM_INPUTLANGCHANGEREQUEST
+0x0002 CONSTANT INPUTLANGCHANGE_FORWARD
+0x0001 CONSTANT INPUTLANGCHANGE_SYSCHARSET
+
+: LNG-CHANGE0  ( lParam wParam hwnd -- )
+    WM_INPUTLANGCHANGEREQUEST SWAP PostMessageA DROP
+;
+
+\ Переключает указанный язык ввода для указанного окна.
+: (LNG-CHANGE) ( syscharset hwnd -- )
+    INPUTLANGCHANGE_SYSCHARSET SWAP LNG-CHANGE0
+;
+
+\ Переключает указанный язык ввода для активного окна.
+: LNG-CHANGE ( syscharset -- )
+    WIN-FOCUS (LNG-CHANGE)
+;
+
+\ Переключает следующий язык ввода для указанного окна.
+: (LNG-NEXT) ( hwnd -- )
+    0 INPUTLANGCHANGE_FORWARD ROT LNG-CHANGE0
+;
+
+\ Переключает следующий язык ввода для активного окна.
+: LNG-NEXT ( -- )
+    WIN-FOCUS (LNG-NEXT)
+;
+
+\ mmmmmmmmmmmmmmmmmmmmmm
+\ Кладёт на стек TRUE eсли была нажата клавиша vk, иначе FALSE. Время ожидания 500 мс.
+: WAIT-KEY-PRESSED { vk -- flag }
+    FALSE 10 0 DO 50 PAUSE vk KEY-PRESSED?
+    IF
+      vk BEGIN DUP KEY-PRESSED? WHILE 50 PAUSE REPEAT DROP  \ слово WAIT-KUP
+      DROP TRUE LEAVE
+    THEN
+    LOOP
+;
+
