@@ -1,0 +1,1228 @@
+\ Файл:       TaskManager.spf
+\ Автор:      dothen
+\ Дата:       12.02.2024
+\ Версия:     1.6.0    (предыдущая версия 1.54 от 02.01.2024)
+\ Описание: Task Manager.
+
+\ При обновлении плагина следует перезагрузить nnCron.
+
+\ В папке "plugins" должны лежать файлы:
+\ ini.spf         (http://www.nncron.ru/download_ru.shtml)
+\ TaskInfo.spf    (http://www.nncron.ru/forums/viewtopic.php?f=5&t=13843)
+\ TimeOptions.spf (http://www.nncron.ru/forums/viewtopic.php?f=5&t=13669)
+\ wincon.dll      (https://sourceforge.net/projects/spf/files/libs)
+\ Для tm.exe рядом должен быть файл tm.exe.manifest
+
+\ В nncron.tab скопировать эту задачу.
+\ #( UpdateTaskInfo
+\ NoActive
+\ Action:
+\     UPDATE-TASK-INFO
+\ )#
+
+\ Запуск менеджера из задачи или из консоли: TASK-MANAGER
+
+\ Управление.
+\ В списке:
+\ Левый клик         - Выбирает задачу.
+\ Двойной левый клик - Запускает задачу.
+\ Правый клик        - Вызывает контекстное меню.
+
+\ В поле "New time":
+\ 0-9, Стрелки, Home, End, F4, -, /, ., ,, :, Ctrl+Home, Цифровой блок, Колесо мыши.
+
+\ В поле "After":
+\ 0-9, Стрелки, Home, End, PageUp, PageDown, Цифровой блок, Колесо мыши.
+
+\ Кнопка "Apply" - установить новое время запуска для выбранной задачи.
+\ Кнопка "Reload" - выполнить TASK-INFO-ALL, обновить весь список.
+\ Кнопка "Cancel" - ничего не сохранять, только закрыть TaskManager.
+\ Кнопка "OK" - установить новое время запуска для выбранной задачи и закрыть TaskManager.
+\ Кнопка "Cur time" - установить в полях ввода текущее время.
+\ F1 - справка nnCron.
+
+\ Колонка Running показывает работающие задачи на момент выполнения TASK-INFO-ALL.
+
+REQUIRE INI-SECTION plugins\ini.spf
+REQUIRE TASK-INFO-ALL plugins\TaskInfo.spf
+REQUIRE RunAfterLoad plugins\TimeOptions.spf
+
+MODULE: TASKMANAGER_MODULE
+
+1 CONSTANT ID_OK
+2 CONSTANT ID_RELOAD
+3 CONSTANT ID_APPLY
+\ 114 CONSTANT MI_TASK_EDIT_CRON
+115 CONSTANT MI_TASK_EDIT
+116 CONSTANT MI_TASK_EXEC_ACTION
+117 CONSTANT MI_TASK_ACTIVATE
+118 CONSTANT MI_TASK_DEACTIVATE
+
+: task.ini ( -- a u ) S" task.ini" +ModuleDirName ;
+
+\ -------------------------------------------
+ModuleName ONLYNAME S" nncron.exe" COMPARE 0=
+[IF]
+
+fVAR TASK_NAME
+
+: GetTaskManagerHwnd ( -- hwnd | 0)
+    S" nnCron Task Manager*" WIN-EXIST?
+    IF WIN-HWND ELSE 0 THEN
+;
+
+: Send_WM_COPYDATA { a u dwData wParam \ cpdat hwnd -- }
+    GetTaskManagerHwnd TO hwnd
+    hwnd 0= IF S" Error Send_WM_COPYDATA" MsgBox EXIT THEN
+    3 CELLS ALLOCATE THROW TO cpdat    \ COPYDATASTRUCT
+    dwData cpdat cp-dwData !
+    u cpdat cp-cbData !
+    a cpdat cp-lpData !
+    cpdat wParam 74 hwnd SendMessageA     \ #define WM_COPYDATA 74
+    0= IF S" Error WM_COPYDATA" MsgBox THEN
+    cpdat FREE DROP
+;
+
+: SendTaskInfo  ( a u -- ) 0 0 Send_WM_COPYDATA ;
+: ReloadTaskInfo    ( -- ) TASK-INFO-ALL SendTaskInfo ;
+
+: ReadINITaskTime ( -- a u )
+    task.ini INI-FILENAME
+    CUR-TASK-NAME INI-SECTION
+    S" TimeSpecification" INI-GET-VALUE
+;
+
+\ При старте nnCron, и перечитывании кронтабов, задаёт время запуска текущей задачи
+\ Т.е. это спецификатор времени Time: в обёртке, указывается без параметров, до раздела Action:,
+\ параметры т.е. строка <время в cron-формате> берётся из файла "task.ini".
+: IniTime ( -- )
+    CF-INI-TIME CRON-FLAG1
+    ReadINITaskTime
+    2DUP S" default value" COMPARE 0=
+    IF 2DROP ELSE EVALUATE THEN
+; IMMEDIATE
+
+\ Задаёт время запуска для указанной задачи. Работает только внутри раздела Action:
+\ время берётся из файла "task.ini"
+: SetTaskTime ( task -- )
+    CUR-NODE >R CUR-TIME >R
+    DUP >R @ TO CUR-NODE
+    ReadINITaskTime S" Time: " NIP /STRING
+    2DUP S" default value" COMPARE 0=
+    IF 2DROP ELSE SetStr-Task-Time THEN
+    R> TASK-ACTIVATE
+    R> TO CUR-TIME R> TO CUR-NODE
+;
+
+: (TASK-MANAGER) { a u -- }
+    S" REQUIRE TaskManager plugins\TaskManager.spf" StartTM
+    FALSE
+    50 0 DO 100 PAUSE S" nnCron Task Manager*" WIN-EXIST?  
+    IF DROP TRUE LEAVE THEN LOOP
+    IF
+        a u SendTaskInfo
+    ELSE
+        S" nnCron Task manager not loaded" MsgBox
+    THEN
+;
+
+EXPORT
+
+: UPDATE-TASK-INFO { \ a u flg -- }
+    TASK_NAME
+    <TIB NextWord NextWord TIB>
+    TO u TO a
+    S>NUM TO flg
+    flg
+    CASE
+        ID_OK OF
+            a u ?DUP IF EVALUATE SetTaskTime ELSE DROP THEN \ Задаём время запуска для задачи.
+        ENDOF
+        ID_RELOAD OF
+            ReloadTaskInfo \ Отправляем в менеджер данные полученные TASK-INFO-ALL.
+        ENDOF
+        ID_APPLY OF
+            a u ?DUP IF EVALUATE SetTaskTime ELSE DROP THEN
+            ReloadTaskInfo
+        ENDOF
+        MI_TASK_EXEC_ACTION OF
+            a u EVALUATE @ start-task-action
+        ENDOF
+        MI_TASK_EDIT OF
+            a u EVALUATE @ CRON-FILENAME @ edit-crontab-action
+\            a u EVALUATE @ CRON-FILENAME @ COUNT edit-file
+        ENDOF
+\        MI_TASK_EDIT_CRON OF
+\            a u EVALUATE @ edit-task-action
+\        ENDOF
+        MI_TASK_ACTIVATE OF
+            a u EVALUATE TASK-ACTIVATE
+            ReloadTaskInfo
+        ENDOF
+        MI_TASK_DEACTIVATE OF
+            a u EVALUATE TASK-DEACTIVATE
+            ReloadTaskInfo
+        ENDOF
+    ENDCASE
+;
+\ Баг в tm.exe. Диалог "nnCron Редактирование задачи" (вызывается словом edit-task-action).
+\ Диалог ведет себя неадекватно если в задаче есть опции
+\ Also, HyperActive, NoRunAs, OnceA*, SingleInstance, а также комментарии до раздела Action:
+
+ : TASK-MANAGER ( -- ) TASK-INFO-ALL (TASK-MANAGER) ;
+\ : TASK1-MANAGER ( task -- ) TASK-INFO (TASK-MANAGER) ;
+
+;MODULE
+
+\EOF
+
+[THEN]
+\ ------------------------------------------
+
+
+WINAPI: FindWin32Constant plugins/WINCON.DLL
+: ?WIN-CONST-SLITERAL ( addr u -- )
+2>R 0 SP@ 2R> SWAP FindWin32Constant 0= IF DROP -321 THROW THEN [COMPILE] LITERAL ;
+: NOTFOUND ( addr u -- )
+2DUP 2>R ['] ?WIN-CONST-SLITERAL CATCH IF 2DROP 2R> ?SLITERAL ELSE 2R> 2DROP THEN ;
+: Free-Library ( addr -- ) GetModuleHandleA ?DUP IF BEGIN DUP FreeLibrary 0= UNTIL DROP THEN ;
+
+\ В nncron.exe    : <# PAD HLD ! 0 HOLD ;
+\ В tm.exe        : <# PAD HLD ! ; 
+: NUM>S ( u -- a u ) S>D <# 0 HOLD #S #> 1- ;
+
+\ Конвертировать слово (2 байта) в двойное слово (4 байта).
+: W>S ( w -- dw )  \ word -> dword
+    DUP 0x8000 AND IF 0xFFFF0000 OR THEN
+;
+
+: to-eol BL SKIP 1 PARSE ;
+: SCONST ( "name" "текст до конца строки" -- )
+    CREATE
+    to-eol S", 0 C,
+    DOES> COUNT
+;
+
+
+\    0
+\    CELL -- hwndFrom
+\    CELL -- idFrom
+\    CELL -- code
+\ CONSTANT /NMHDR
+    0
+    12 -- hdr
+    CELL -- iItem
+    CELL -- iSubItem
+    CELL -- uNewState
+    CELL -- uOldState
+    CELL -- uChanged
+    CELL -- ptAction
+    CELL -- lParam
+    CELL -- uKeyFlags
+CONSTANT /NMITEMACTIVATE
+    0
+    12 -- hdr
+    2  -- wVKey
+    4  -- flags
+CONSTANT /NMLVKEYDOWN
+
+\ -----------------------------
+CLASS: LVColumn
+    var mask
+    var fmt
+    var cx
+    var pszText
+    var cchTextMax
+    var iSubItem
+    var iImage
+    var iOrder
+CONSTR: init ( a u width -- )
+    cx !
+    DUP cchTextMax !
+    S>ZALLOC pszText !
+    LVCF_TEXT LVCF_WIDTH OR LVCF_FMT OR mask !
+    LVCFMT_LEFT fmt !
+;
+DESTR: free  pszText @ ?DUP IF FREE DROP THEN ;
+;CLASS
+\ -----------------------------
+CLASS: LVItem
+    var mask
+    var iItem
+    var iSubItem
+    var state
+    var stateMask
+    var pszText
+    var cchTextMax
+    var iImage
+    var lParam
+    var iIndent
+CONSTR: init ( iImg a u item -- )
+    iItem !
+    DUP cchTextMax !
+    S>ZALLOC pszText !
+    LVIF_IMAGE LVIF_TEXT OR mask !
+    iImage !
+;
+DESTR: free  pszText @ ?DUP IF FREE DROP THEN ;
+;CLASS
+
+WINAPI: SetWindowTheme UxTheme.dll
+
+\ -----------------------------
+\ ---- TListView --------------
+\ -----------------------------
+CLASS: TListView <SUPER Control
+\    var OnItemActivate
+    var OnKeyDown
+    var v_ex_style
+    var vLastIndex
+    var vSelectedItem
+
+VM: Type S" SysListView32" ;
+
+M: SetExStyle
+    v_ex_style @ ?DUP IF DUP LVM_SETEXTENDEDLISTVIEWSTYLE SendMessage DROP THEN ;
+M: InsertColumn ( a u width idx -- )
+    >R LVColumn NEW DUP R> LVM_INSERTCOLUMN SendMessage DROP
+    DELETE ;
+M: InsertItem ( iImg a u idx -- )
+    LVItem NEW DUP 0 LVM_INSERTITEM SendMessage vLastIndex !
+    DELETE ;
+M: SetItem { row col a u \ item -- }
+    0 a u row   \ Параметры для конструктора LVItem.
+    LVItem NEW TO item
+    col item ->CLASS LVItem iSubItem !
+    item row LVM_SETITEMTEXTA SendMessage DROP
+    item DELETE ;
+M: GetItemText { row col \ item -- a u }
+    0 PAD 256 row   \ Параметры для конструктора LVItem.
+    LVItem NEW TO item 
+    col item ->CLASS LVItem iSubItem ! 
+    item row LVM_GETITEMTEXTA SendMessage DROP
+    item ->CLASS LVItem pszText @
+    ASCIIZ> S>TEMP
+    item DELETE
+;
+M: SetItemSelect ( -- ) \ Выделить выбранный элемент.
+    0 0 0 0 LVItem NEW >R 
+    LVIS_SELECTED R@ ->CLASS LVItem stateMask !
+    LVIS_SELECTED R@ ->CLASS LVItem state !
+    R@ vSelectedItem @ LVM_SETITEMSTATE SendMessage DROP
+    R> DELETE
+;
+M: GetNextItem  ( -- n ) LVNI_SELECTED LVNI_FOCUSED OR -1 LVM_GETNEXTITEM SendMessage ;
+M: GetItemCount ( -- n ) 0 0 LVM_GETITEMCOUNT SendMessage ;
+M: ClearAll ( -- ) 0 0 LVM_DELETEALLITEMS SendMessage DROP ;
+M: EnsureVisible ( -- ) 0 vSelectedItem @ LVM_ENSUREVISIBLE SendMessage DROP ;
+
+\ N: LVN_ITEMACTIVATE lparam @ iItem @ vSelectedItem ! OnItemActivate GoParent ;  \ По умолчанию двойной клик.
+N: NM_CLICK lparam @ iItem @ vSelectedItem ! OnClick GoParent ;
+N: NM_DBLCLK lparam @ iItem @ vSelectedItem ! OnDoubleClick GoParent ;
+N: NM_RCLICK lparam @ iItem @ vSelectedItem ! OnRClick GoParent ;
+N: LVN_KEYDOWN
+    lparam @ wVKey W@
+    CASE
+      VK_DOWN OF GetNextItem 1+ GetItemCount 1- MIN vSelectedItem ! OnKeyDown GoParent ENDOF
+      VK_UP   OF GetNextItem 1- 0 MAX vSelectedItem ! OnKeyDown GoParent ENDOF
+    ENDCASE
+;
+M: HideFocus ( -- ) \ Убираем пунктирную рамку фокуса.
+    UIS_SET 16 LSHIFT UISF_HIDEFOCUS + wparam !
+    lparam @ wparam @ WM_UPDATEUISTATE SendMessage DROP ;
+
+VM: AfterCreate
+    Z" Explorer" AZ>UNICODE >R 0 R@ handle @ SetWindowTheme DROP R> FREE DROP \ Включаем тему "Explorer" для ListView
+    SetExStyle
+    S" №"          30  0 InsertColumn
+    S" Task name"  200 1 InsertColumn
+    S" Running"    60  2 InsertColumn
+    S" NoActive"   65  3 InsertColumn
+    S" Time:"      135 4 InsertColumn
+    S" Next time"  135 5 InsertColumn
+    S" Prev time"  135 6 InsertColumn
+    S" Last start" 135 7 InsertColumn
+    S" Hot key"    135 8 InsertColumn
+    S" File name"  135 9 InsertColumn
+    SetOwnProc
+    HideFocus
+;
+W: WM_UPDATEUISTATE  UIS_SET 16 LSHIFT UISF_HIDEFOCUS + wparam ! ToOrigProc DROP ;
+;CLASS
+\ -----------------------------------
+CLASS: TDateTimePicker <SUPER Control
+    var OnChange
+VM: Type S" SysDateTimePick32" ;
+M: GetTime ( -- ms-s m-h d-wd m-y ) 0 0 0 0 SP@ 0 DTM_GETSYSTEMTIME SendMessage DROP ;
+M: SetTime ( ms-s m-h d-wd m-y -- ) SP@ GDT_VALID DTM_SETSYSTEMTIME SendMessage DROP 2DROP 2DROP ;
+M: SetFormat DROP 0 DTM_SETFORMATA SendMessage DROP ;
+VM: AfterCreate
+\    S" HH':'mm':00    'ddd'  'dd'.'MM'.'yyy' 'MMM" SetFormat
+    S" dd'.'MM'.'yyy'  'HH':'mm':00  'MMM' 'ddd" SetFormat
+    SetOwnProc
+;
+\ Изменение значения колесом мыши.
+W: WM_MOUSEWHEEL
+    wparam @ HIWORD W>S 0>
+    IF
+      0 VK_UP WM_KEYDOWN SendMessage DROP
+      0 VK_UP WM_KEYUP SendMessage DROP
+    ELSE
+      0 VK_DOWN WM_KEYDOWN SendMessage DROP
+      0 VK_DOWN WM_KEYUP SendMessage DROP
+    THEN
+    0
+;
+N: DTN_DATETIMECHANGE OnChange GoParent ;
+;CLASS
+\ -----------------------------
+Control REOPEN
+M: pos ( x y -- ) vY ! vX ! ;
+M: size ( w h -- ) vHeight ! vWidth ! ;
+M: ps ( row col w h -- ) row_h * SWAP cols SWAP size col SWAP row pos ;
+M: SetPosY ( h -- ) vX @ SWAP vY @ + SetPos ;
+M: Text! ( a u -- ) DROP 0 WM_SETTEXT SendMessage DROP ;
+M: Text@ ( -- a u ) 256 TEMP-ALLOC DUP 256 WM_GETTEXT SendMessage ;
+;CLASS
+\ ---------------------------
+\ Поле для ввода цифр (0-9).
+CLASS: EditNum <SUPER Control
+    var OnChange
+VM: Type S" edit" ;
+VM: Style WS_BORDER ES_CENTER OR ;
+M: SetLimit ( u -- ) 0 SWAP EM_LIMITTEXT SendMessage DROP ;
+VM: AfterCreate
+    4 SetLimit
+    SetOwnProc
+;
+W: WM_PASTE 0 ;
+
+W: WM_CHAR
+    wparam @ [CHAR] 0 [CHAR] 9 1+ WITHIN
+    wparam @ VK_BACK = OR
+\    IF ToOrigProc . CR ELSE 0 THEN
+    IF ToOrigProc DROP THEN
+    0
+;
+
+W: WM_KEYDOWN
+    wparam @
+    CASE
+      VK_UP    OF Text@ S>NUM 1+ 9999 MIN NUM>S Text! 0 EXIT ENDOF
+      VK_DOWN  OF Text@ S>NUM 1- 0 MAX NUM>S Text! 0 EXIT ENDOF
+      VK_PRIOR OF Text@ S>NUM 20 + 9999 MIN NUM>S Text! 0 EXIT ENDOF
+      VK_NEXT  OF Text@ S>NUM 20 - 0 MAX NUM>S Text! 0 EXIT ENDOF
+\      VK_HOME OF  ENDOF
+\      VK_END OF  ENDOF
+    ENDCASE
+    ToOrigProc DROP
+;
+W: WM_MOUSEWHEEL
+    wparam @ HIWORD W>S 0>
+    IF   Text@ S>NUM 1+ 9999 MIN NUM>S
+    ELSE Text@ S>NUM 1- 0 MAX NUM>S
+    THEN
+    Text!
+    0
+;
+C: EN_CHANGE  OnChange GoParent ;
+;CLASS
+\ --------------------------
+Font REOPEN
+CONSTR: init
+14 height ! FW_DONTCARE weight !
+S" MS Shell Dlg 2" DROP lpszFace ! ;  \ "MS Shell Dlg 2"=Tahoma "MS Shell Dlg"=Microsoft Sans Serif
+;CLASS
+\ --------------------------
+Edit REOPEN
+VM: Style 0 ;
+VM: ExStyle 0 ;
+;CLASS
+\ --------------------------
+Button REOPEN
+M: HideFocus ( -- ) \ Убираем пунктирную рамку фокуса.
+    UIS_SET 16 LSHIFT UISF_HIDEFOCUS + wparam !
+    lparam @ wparam @ WM_UPDATEUISTATE SendMessage DROP ;
+VM: AfterCreate SetOwnProc HideFocus ;
+W: WM_UPDATEUISTATE  UIS_SET 16 LSHIFT UISF_HIDEFOCUS + wparam ! ToOrigProc DROP ;
+;CLASS
+\ --------------------------
+Static REOPEN
+VM: Style SS_CENTERIMAGE ; \ WS_BORDER OR ;
+;CLASS
+\ --------------------------
+CLASS: Static1 <SUPER Static
+    var vFont
+VM: AfterCreate
+    Font NEW vFont !
+    12 vFont @ ->CLASS Font height !
+    vFont @ ->CLASS Font Create
+    vFont @ ->CLASS Font handle @ SetFont
+;
+;CLASS
+\ --------------------------
+CLASS: Static2 <SUPER Static
+    var vFont
+VM: AfterCreate
+    Font NEW vFont !
+    16 vFont @ ->CLASS Font height !
+    FW_BOLD vFont @ ->CLASS Font weight !
+    vFont @ ->CLASS Font Create
+    vFont @ ->CLASS Font handle @ SetFont
+;
+;CLASS
+\ --------------------------
+\ Структура MINMAXINFO используется при обработке сообщения WM_GETMINMAXINFO
+0
+2CELL -- ptReserved
+2CELL -- ptMaxSize
+2CELL -- ptMaxPosition
+2CELL -- ptMinTrackSize
+2CELL -- ptMaxTrackSize
+CONSTANT /MINMAXINFO
+
+WINAPI: GetSystemMetrics USER32.DLL
+
+\ -----------------------------------------
+\ ---- TaskManagerDialog ------------------
+\ -----------------------------------------
+CLASS: TaskManagerDialog <SUPER FrameWindow
+    var ClientW
+    var ClientH
+    var vTasksInfo
+    var vTaskName
+    var vTaskTime
+    var vTaskNoAc
+
+\ Размеры ячейки виртуальной координатной сетки окна (row_h x col_w).
+20 TO row_h \ Высота ряда в пикселях.
+20 TO col_w \ Ширина колонки в пикселях.
+
+SM_CYCAPTION GetSystemMetrics CONSTANT CYCaption \ Высота заголовка окна в пикселях.
+SM_CXFRAME GetSystemMetrics   CONSTANT CXFrame \ Ширина рамки окна в пикселях.
+37 CONSTANT ListW \ Ширина окна списка в ячейках.
+10 CONSTANT ListH \ Высота окна списка в ячейках.
+\ Исходный размер главного окна, вычисляется относительно размера окна списка.
+\ Можно подставить свои значения для констант ListW и ListH.
+\ Минимальный размер главного окна устанавливает сообщение WM_GETMINMAXINFO.
+
+ListW 2 + col_w * CXFrame 2 * +
+    CONSTANT winwidth \ Ширина окна в пикселях.
+ListH 11 + row_h * CYCaption + CXFrame +
+    CONSTANT winheight \ Высота окна в пикселях.
+23  CONSTANT but_h \ Высота и
+75  CONSTANT but_w \ ширина кнопок OK, Cancel, Reload, Apply.
+
+SCONST sN 0
+
+CREATE TimeStr 128 ALLOT
+
+VM: Style vStyle 0! WS_OVERLAPPEDWINDOW ;
+
+\ Позиция элементов задается относительно нижнего края окна списка.
+M: pz ( row col w h -- ) WITH Control >R >R >R ListH + R> R> R> ps ENDWITH ;
+\ Позиция основных кнопок задается относительно правого края окна списка.
+M: pb ( row col w h -- ) WITH Control >R >R ListW 2 + SWAP - >R ListH + R> R> R> ps ENDWITH ;
+
+Static OBJ st_fon :init a v 0 0 0 0 ps WS_DISABLED WS_CLIPSIBLINGS OR vStyle ! ;
+
+Static1 OBJ st1_alltask  :init a v -1  1 3 1 ps S" 1" text SS_LEFT WS_DISABLED OR ( WS_BORDER OR ) vStyle ! ;
+Static1 OBJ st1_curtask  :init a v -1  4 4 1 ps S" 2" text SS_LEFT WS_DISABLED OR ( WS_BORDER OR ) vStyle ! ;
+
+TListView OBJ lv_tasks
+   :init a v 0 1 ListW ListH ps
+    LVS_EX_FULLROWSELECT LVS_EX_HEADERDRAGDROP OR LVS_EX_INFOTIP OR
+    LVS_EX_DOUBLEBUFFER OR ( LVS_EX_ONECLICKACTIVATE OR ) v_ex_style !
+    LVS_REPORT LVS_SINGLESEL OR LVS_SHOWSELALWAYS OR WS_BORDER OR WS_TABSTOP OR vStyle !
+;
+
+RadioButton OBJ rb_newtime   :init a v 2 1 5 1 pz S" New time" text tabstop ;
+RadioButton OBJ rb_cronformat :init a v 4 1 5 1 pz S" Cron-format" text WS_DISABLED vStyle ! ;
+RadioButton OBJ rb_after       :init a v 6 1 3 1 pz S" After" text tabstop ;
+
+Static OBJ st_clock             :init a v 1 6 11 1 pz WS_DISABLED vStyle ! ;
+TDateTimePicker OBJ dt_newtime :init a v 2 6 11 1 pz tabstop ;
+Edit OBJ ed_cronformat         :init a v 4 6 11 1 pz WS_BORDER WS_DISABLED OR vStyle ! ;
+
+Static1 OBJ st1_sec  :init a v 5  5 2 1 pz S" seconds" text SS_CENTER WS_DISABLED OR vStyle ! ;
+Static1 OBJ st1_min  :init a v 5  7 2 1 pz S" minutes" text SS_CENTER WS_DISABLED OR vStyle ! ;
+Static1 OBJ st1_hour :init a v 5  9 2 1 pz S" hours"   text SS_CENTER WS_DISABLED OR vStyle ! ;
+Static1 OBJ st1_day  :init a v 5 11 2 1 pz S" days"    text SS_CENTER WS_DISABLED OR vStyle ! ;
+Static1 OBJ st1_mon  :init a v 5 13 2 1 pz S" months"  text SS_CENTER WS_DISABLED OR vStyle ! ;
+Static1 OBJ st1_year :init a v 5 15 2 1 pz S" years"   text SS_CENTER WS_DISABLED OR vStyle ! ;
+
+Static2 OBJ st_sec  :init a v 6  5 2 1 pz sN text SS_CENTER vStyle ! ;
+Static2 OBJ st_min  :init a v 6  7 2 1 pz sN text SS_CENTER vStyle ! ;
+Static2 OBJ st_hour :init a v 6  9 2 1 pz sN text SS_CENTER vStyle ! ;
+Static2 OBJ st_day  :init a v 6 11 2 1 pz sN text SS_CENTER vStyle ! ;
+Static2 OBJ st_mon  :init a v 6 13 2 1 pz sN text SS_CENTER vStyle ! ;
+Static2 OBJ st_year :init a v 6 15 2 1 pz sN text SS_CENTER vStyle ! ;
+
+EditNum OBJ ed_min  :init a v 7  7 2 1 pz tabstop ;
+EditNum OBJ ed_hour :init a v 7  9 2 1 pz tabstop ;
+EditNum OBJ ed_day  :init a v 7 11 2 1 pz tabstop ;
+EditNum OBJ ed_mon  :init a v 7 13 2 1 pz tabstop ;
+
+Edit OBJ ed_seltask
+:init
+    a v 1 18 20 6 pz
+    ES_MULTILINE ES_READONLY OR WS_VSCROLL OR WS_TABSTOP OR vStyle !
+    WS_EX_CLIENTEDGE vExStyle !
+;
+
+: YWMDHM>STR ( year wday mon day hour min -- a u )
+    TimeStr OFF
+    6 0 DO
+    S"  " TimeStr +ZPLACE
+    DUP -1 = IF DROP S" *" ELSE NUM>S THEN TimeStr +ZPLACE
+    LOOP
+    TimeStr ASCIIZ>
+;
+
+\ Прибавить n месяцев к текущей дате. Применять до прибавления дней, часов, минут.
+: ADD-MON ( n -- year mon day )
+    Mon@ + 12 /MOD OVER 0=
+    IF NIP 1- 12 SWAP THEN Year@ + SWAP
+    2DUP MonLength Day@ MIN \ Текущее число может быть больше чем количество дней в полученном месяце.
+;
+
+\ Сначала надо прибавлять месяцы затем дни и минуты, иначе будут перескоки.
+: CALC-TIME-AFTER ( -- y M d h m s )
+    ed_min Text@ S>NUM
+    ed_hour Text@ S>NUM 60 * +
+    1440 /MOD SWAP >R >R
+    ed_mon Text@ S>NUM
+    ADD-MON
+    ed_day Text@ S>NUM R> +
+    DAY+ Hour@ Min@ R>
+    MINUTE+ 0
+;
+
+: SET-NEXT-TIME { y M d h m s -- }
+    0
+    m 16 LSHIFT h OR
+    d 16 LSHIFT y M d WEEK-DAY OR
+    M 16 LSHIFT y OR
+    dt_newtime SetTime ( ms-s m-h d-wd m-y -- )
+;
+
+: GET-NEXT-TIME { f \ y w M d h m s -- y M d h m s | -- y w M d h m }
+    dt_newtime GetTime  ( ms-s m-h d-wd m-y )
+    DUP LOWORD TO y HIWORD TO M
+    DUP LOWORD TO w HIWORD TO d
+    DUP LOWORD TO h HIWORD TO m
+\    LOWORD TO s
+    DROP 0 TO s
+    f IF y M d h m s ELSE y w DUP 0= IF DROP 7 THEN M d h m THEN
+;
+
+: GET-YMDHMS ( -- y M d h m s ) TRUE GET-NEXT-TIME ;
+: GET-YWMDHM ( -- y w M d h m ) FALSE GET-NEXT-TIME ;
+
+: ShowCurTime ( -- a u )
+    TimeStr OFF
+    S"  " TimeStr ZPLACE
+    DD TimeStr +ZPLACE
+    S" ." TimeStr +ZPLACE
+    MM TimeStr +ZPLACE
+    S" ." TimeStr +ZPLACE
+    YYYY TimeStr +ZPLACE
+    S"   " TimeStr +ZPLACE
+    hh TimeStr +ZPLACE
+    S" :" TimeStr +ZPLACE
+    mm TimeStr +ZPLACE
+    S" :" TimeStr +ZPLACE
+    ss TimeStr +ZPLACE
+    S"   " TimeStr +ZPLACE
+    MMM TimeStr +ZPLACE
+    S"  " TimeStr +ZPLACE
+    WW TimeStr +ZPLACE
+    TimeStr ASCIIZ> st_clock Text!
+;
+\ Количество дней в месяце перед указанным.
+: PrevMonLength ( y M -- Days ) DUP 1 = IF DROP 1- 12 ELSE 1- THEN MonLength ;
+
+\ Надо конвертировать в секунды а затем вычитать, если наоборот, тогда теряется 1 секунда.
+: DiffTime ( d1 d2 -- y M d h m s ) { \ y M d h m s -- }
+\    2SWAP FT>SEC 2SWAP FT>SEC FT- D>S 0 > 0=
+    2SWAP FT>SEC 2SWAP FT>SEC FT- 0. 2SWAP D< 0=
+    IF
+      0 0 0 0 0 0 TO s TO m TO h TO d TO M TO y
+    ELSE
+    GET-YMDHMS TO s TO m TO h TO d TO M TO y
+    s Sec@  < IF s 60 + TO s m 1- TO m THEN s Sec@ - TO s
+    m Min@  < IF m 60 + TO m h 1- TO h THEN m Min@ - TO m
+    h Hour@ < IF h 24 + TO h d 1- TO d THEN h Hour@ - TO h
+    d Day@  < IF d y M PrevMonLength + TO d M 1- TO M THEN d Day@ - TO d
+    M Mon@  < IF M 12 + TO M y 1- TO y THEN M Mon@ - TO M
+    y Year@ - TO y
+    THEN
+    y M d h m s
+;
+
+: PasteNextTime ( -- )
+    CALC-TIME-AFTER
+    SET-NEXT-TIME
+;
+
+: PasteCronFormat ( -- )
+    GET-YWMDHM YWMDHM>STR
+    ed_cronformat Text!
+;
+
+: (PasteAfter) ( y M d h m s -- )
+    NUM>S st_sec Text!
+    NUM>S st_min Text!
+    NUM>S st_hour Text!
+    NUM>S st_day Text!
+    NUM>S st_mon Text!
+    NUM>S st_year Text!
+;
+
+: PasteAfter ( -- )
+    GET-YMDHMS YMDHMS>FT FT-CUR
+    DiffTime
+    (PasteAfter)
+;
+
+\ -----------------
+: PasteTime0 ( -- )
+    GET-CUR-TIME
+    S" After" rb_after Text! \ Это костыль для устранения моргания статиков при изменении их текста.
+    ShowCurTime
+    Sec@ 0=
+    IF
+      rb_newtime GetCheck
+      IF PasteCronFormat THEN
+      rb_after GetCheck
+      IF PasteNextTime PasteCronFormat THEN
+    THEN
+    PasteAfter
+;
+
+M: PasteTime ( -- )
+    rb_after GetCheck
+    IF PasteNextTime THEN
+    PasteAfter
+    PasteCronFormat
+;
+
+\ ----------------
+M: TimeType ( -- )
+    rb_newtime GetCheck
+    IF dt_newtime Enable ELSE dt_newtime Disable THEN
+    rb_cronformat GetCheck
+    IF ed_cronformat Enable ELSE ed_cronformat Disable THEN
+    rb_after GetCheck
+    IF
+      ed_min Enable ed_min Show
+      ed_hour Enable ed_hour Show
+      ed_day Enable ed_day Show
+      ed_mon Enable ed_mon Show
+      sN st_sec Text!
+      sN st_min Text!
+      sN st_hour Text!
+      sN st_day Text!
+      sN st_mon Text!
+      sN st_year Text!
+    ELSE
+      sN ed_min Text!
+      sN ed_hour Text!
+      sN ed_day Text!
+      sN ed_mon Text!
+      ed_min Disable ed_min Hide
+      ed_hour Disable ed_hour Hide
+      ed_day Disable ed_day Hide
+      ed_mon Disable ed_mon Hide
+    THEN
+    PasteTime
+;
+
+2003 CONSTANT RUN_TASK
+0
+1 CELLS -- cp-dwData
+1 CELLS -- cp-cbData
+1 CELLS -- cp-lpData
+DROP
+
+: nnCronHwnd ( -- hwnd )
+    Z" nnCron control window" 0  FindWindowA
+;
+
+: RUN-TASK-ERR S" Task not found" MsgBox ;
+
+\ Запуск задачи из менеджера. Это переделанное слово -run
+: RUNTASK { a u \ cpdat -- }
+    u 0>
+    IF
+      3 CELLS ALLOCATE THROW TO cpdat
+      RUN_TASK cpdat cp-dwData !
+      u cpdat cp-cbData !
+      a cpdat cp-lpData !
+      cpdat RUN_TASK WM_COPYDATA
+      nnCronHwnd ?DUP IF SendMessageA ELSE 2DROP DROP 0 THEN
+      0= IF RUN-TASK-ERR THEN
+      cpdat FREE DROP
+    THEN
+;
+
+: GetTaskName ( -- )
+    lv_tasks vSelectedItem @
+    1 lv_tasks GetItemText
+    vTaskName @ ?DUP IF FREE DROP THEN
+    S>ZALLOC vTaskName !
+;
+
+: GetTaskTime ( -- )
+    lv_tasks vSelectedItem @
+    4 lv_tasks GetItemText
+    vTaskTime @ ?DUP IF FREE DROP THEN
+    S>ZALLOC vTaskTime !
+;
+
+: GetTaskNoAc ( -- )
+    lv_tasks vSelectedItem @
+    3 lv_tasks GetItemText
+    vTaskNoAc @ ?DUP IF FREE DROP THEN
+    S>ZALLOC vTaskNoAc !
+;
+
+\ Запуск выбранной задачи.
+M: RunSelTask ( -- )
+    lv_tasks vSelectedItem @ -1 = IF EXIT THEN
+    GetTaskName
+    vTaskName @ ASCIIZ>
+    RUNTASK
+;
+
+SCONST sCurTaskNum Current:     
+SCONST sTasks Tasks:     
+SCONST sTask Task: 
+SCONST sFile File: 
+SCONST sNoAc NoActive
+SCONST sTime Time: 
+SCONST sHotK WatchHotKey: 
+SCONST sLast Last start: 
+SCONST sPrev Prev time: 
+SCONST sNext Next time: 
+SCONST sRunn Running: 
+
+0 VALUE nrow
+
+: NextLine ( -- a u ? ) 
+    10 SKIP 13 PARSE DUP ?DUP 0= 
+    IF EndOfChunk 0= THEN
+;
+
+: SETITEM { a1 u1 n a u -- }
+    a u a1 u1 DROP OVER COMPARE 0=
+    IF
+    a CASE
+        sTask DROP OF nrow 1+ TO nrow 0 nrow 1+ NUM>S nrow lv_tasks InsertItem
+                      nrow n a1 u1 u /STRING lv_tasks SetItem ENDOF
+        sNoAc DROP OF nrow n sNoAc lv_tasks SetItem ENDOF
+        sFile DROP OF nrow n a1 u1 u /STRING S>TEMP ONLYNAME lv_tasks SetItem ENDOF
+        DUP        OF nrow n a1 u1 u /STRING lv_tasks SetItem ENDOF
+      ENDCASE
+    THEN
+;
+
+:  LOAD-TASK-LIST ( a u -- )
+    -1 TO nrow
+    <TIB
+        BEGIN NextLine WHILE
+    2DUP 1 sTask SETITEM
+    2DUP 2 sRunn SETITEM
+    2DUP 3 sNoAc SETITEM
+    2DUP 4 sTime SETITEM
+    2DUP 5 sNext SETITEM
+    2DUP 6 sPrev SETITEM
+    2DUP 7 sLast SETITEM
+    2DUP 8 sHotK SETITEM
+    9 sFile SETITEM
+        REPEAT
+        2DROP
+    TIB>
+    nrow 1+ NUM>S sTasks DROP 7 + ZPLACE sTasks st1_alltask Text!
+;
+
+: GetTaskInfo ( -- a u )
+    vTasksInfo @ ASCIIZ>
+    vTaskName @ ASCIIZ>
+    SEARCH 0= IF 2DROP S" Error" THEN
+    OVER >R
+    S" Task:" SEARCH IF DROP R@ - R@ SWAP THEN RDROP
+    S>TEMP   \ PAD ZPLACE PAD ASCIIZ> \ строка может быть больше PAD
+;
+
+: SetTitle ( -- )
+    S" nnCron Task Manager - [" PAD ZPLACE
+    vTaskName @ ASCIIZ> PAD +ZPLACE
+    S" ]" PAD +ZPLACE
+    PAD ASCIIZ> SetText
+;
+
+: SetCurTaskNum ( -- )
+    lv_tasks vSelectedItem @
+    0 lv_tasks GetItemText
+    sCurTaskNum DROP 9 + ZPLACE sCurTaskNum
+    st1_curtask Text!
+;
+
+\ -------------------
+M: ShowSelTask ( -- )
+    lv_tasks vSelectedItem @ -1 = IF EXIT THEN
+    GetTaskName
+    GetTaskTime
+    GetTaskNoAc
+    GetTaskInfo
+    ed_seltask Text!
+    SetTitle
+    SetCurTaskNum
+;
+
+: ReloadTaskInfoList ( -- )
+    lv_tasks ClearAll
+    vTasksInfo @ ASCIIZ> LOAD-TASK-LIST
+    ShowSelTask
+    lv_tasks SetItemSelect
+    lv_tasks EnsureVisible
+    lv_tasks SetFocus
+;
+
+CREATE StrTime 128 ALLOT
+CREATE StrTask 128 ALLOT
+
+: WriteTaskName ( -- )
+    StrTask ASCIIZ> S" var\TASK_NAME" FWRITE
+;
+
+: Write_TASK_NAME ( -- )
+    vTaskName @ ASCIIZ> StrTask +ZPLACE
+    WriteTaskName
+;
+
+: (Write_Task_ini) ( a1 u1 a2 u2-- ) \ a1 u1 время, a2 u2 имя задачи
+    task.ini INI-FILENAME
+    INI-SECTION
+    S" TimeSpecification" 2SWAP
+    INI-SET-VALUE
+;
+
+: Write_Task_ini ( -- )
+    S" Time:" StrTime ZPLACE
+    ed_cronformat Text@ StrTime +ZPLACE
+    StrTime ASCIIZ>
+    vTaskName @ ASCIIZ>
+    (Write_Task_ini) 
+;
+
+: InsertFlag ( n -- ) S>D <# BL HOLD #S #> StrTask ZPLACE ;
+
+: SetNewTime ( n -- )
+    DUP InsertFlag
+    ID_RELOAD =
+    IF
+        WriteTaskName           \ Записать флаг ID_RELOAD в файловую переменную.
+    ELSE
+        Write_TASK_NAME         \ Записать флаг и имя задачи в файловую переменную.
+        Write_Task_ini          \ Записать в task.ini время для выбранной задачи.
+    THEN
+    S" UpdateTaskInfo" RUNTASK  \ Установить новое время для выбранной задачи и/или обновить список.
+;
+
+M: onOk ID_OK SetNewTime 0 Close ;
+M: onCancel 1 Close ;
+M: onReload ID_RELOAD SetNewTime ;
+M: onApply ID_APPLY SetNewTime ;
+M: onCurTime
+    Year@ Mon@ Day@ Hour@ Min@ Sec@ SET-NEXT-TIME
+    sN ed_min Text!
+    sN ed_hour Text!
+    sN ed_day Text!
+    sN ed_mon Text!
+;
+
+Button OBJ but_ok
+:init
+    a v 8 17 0 0 pb but_w but_h size
+    S" OK" text
+    BS_DEFPUSHBUTTON vStyle !  tabstop 
+    ['] onOk OnClick !
+;
+Button OBJ but_cancel
+:init
+    a v 8 13 0 0 pb but_w but_h size
+    S" Cancel" text
+     tabstop 
+    ['] onCancel OnClick !
+;
+Button OBJ but_reload
+:init
+    a v 8 9 0 0 pb but_w but_h size
+    S" Reload" text
+     tabstop 
+    ['] onReload OnClick !
+;
+Button OBJ but_apply
+:init
+    a v 8 5 0 0 pb but_w but_h size
+    S" Apply" text
+     tabstop 
+    ['] onApply OnClick !
+;
+Button OBJ but_curtime
+:init
+\    a v 1 1 4 1 pz
+    a v 20 230 pos 80 20 size
+    S"  Cur time" text
+    tabstop
+    ['] onCurTime OnClick !
+;
+
+\ Навигация по Tab будет в обратном порядке ресайза.
+: ReSize { \ w h } 
+    vWidth @ ClientW @ - TO w
+    vHeight @ ClientH @ - TO h
+
+    0 vHeight @ vWidth @ 0 0
+    HWND_TOP st_fon handle @ SetWindowPos DROP
+\ ListView
+    lv_tasks vWidth @ w +
+    lv_tasks vHeight @ h +
+    lv_tasks SetSizePixels
+
+    h st_clock SetPosY
+    h st1_sec SetPosY
+    h st1_min SetPosY
+    h st1_hour SetPosY
+    h st1_day SetPosY
+    h st1_mon SetPosY
+    h st1_year SetPosY
+    h st_sec SetPosY
+    h st_min SetPosY
+    h st_hour SetPosY
+    h st_day SetPosY
+    h st_mon SetPosY
+    h st_year SetPosY
+    h st_sec SetPosY
+    h st_year SetPosY
+
+    but_apply vX @ w +
+    but_apply vY @ h +
+    but_apply SetPos
+    but_reload vX @ w +
+    but_reload vY @ h +
+    but_reload SetPos
+    but_cancel vX @ w +
+    but_cancel vY @ h +
+    but_cancel SetPos
+    but_ok vX @ w +
+    but_ok vY @ h +
+    but_ok SetPos
+
+    h ed_mon SetPosY
+    h ed_day SetPosY
+    h ed_hour SetPosY
+    h ed_min SetPosY
+    h rb_after SetPosY
+    h ed_cronformat SetPosY
+    h rb_cronformat SetPosY
+    h dt_newtime SetPosY
+    h rb_newtime SetPosY
+    h ed_seltask SetPosY
+    h but_curtime SetPosY
+;
+
+W: WM_ERASEBKGND 1 ;
+
+W: WM_SETFOCUS lv_tasks SetFocus 0 ;
+
+W: WM_SIZE
+    lparam @ LOWORD vWidth !
+    lparam @ HIWORD vHeight !
+    ReSize
+    0
+;
+
+\ Задаём минимальный размер окна.
+W: WM_GETMINMAXINFO 320 370 lparam @ ptMinTrackSize 2! 0 ;
+
+1000 CONSTANT IDT_CUR_TIME
+
+W: WM_TIMER wparam @ IDT_CUR_TIME = IF PasteTime0 THEN 0 ;
+
+VM: OnPaint ;
+
+W: WM_COPYDATA
+    wparam @ 0=
+    IF
+      vTasksInfo @ ?DUP IF FREE DROP THEN
+      lparam @ cp-lpData @ lparam @ cp-cbData @ S>ZALLOC vTasksInfo !
+      ReloadTaskInfoList
+    ELSE
+        S" Error W: WM_COPYDATA" MsgBox
+    THEN
+    TRUE
+;
+
+\ ---------------------------------
+\ ------------ Menu ---------------
+\ ---------------------------------
+
+: CurTaskMenu ( -- h )
+    POPUPMENU
+    S" Start" MI_TASK_EXEC_ACTION MENUITEM
+    MENUSEPARATOR
+    S" Activate" MI_TASK_ACTIVATE MENUITEM
+    S" Deactivate" MI_TASK_DEACTIVATE MENUITEM
+    MENUSEPARATOR
+    S" Edit" MI_TASK_EDIT MENUITEM
+\    S" Edit Task nnCron" MI_TASK_EDIT_CRON MENUITEM
+    END-MENU
+;
+
+WINAPI: EnableMenuItem   USER32.DLL
+WINAPI: TrackPopupMenuEx USER32.DLL
+WINAPI: DestroyMenu      USER32.DLL
+WINAPI: GetCursorPos     USER32.DLL
+
+: EnableItem ( hMenu -- )
+    vTaskNoAc @ ASCIIZ> S" NoActive" COMPARE 0=
+    IF
+        MI_TASK_DEACTIVATE
+    ELSE
+        MI_TASK_ACTIVATE
+    THEN
+    MF_BYCOMMAND MF_GRAYED OR SWAP ROT EnableMenuItem DROP
+;
+
+: CalcMenuYX ( -- y x) 0 0 SP@ GetCursorPos DROP ;
+
+: ShowMenu ( -- flg ) \ flg это константа MI_TASK_*
+    ShowSelTask
+    handle @ SetForegroundWindow DROP
+    CurTaskMenu >R
+    R@ EnableItem
+    0 handle @ CalcMenuYX
+    TPM_RETURNCMD R@ TrackPopupMenuEx
+    R> DestroyMenu DROP
+;
+
+: menu-action ( flg -- )
+    InsertFlag
+    Write_TASK_NAME           \ Записать флаг и имя задачи в файловую переменную.
+    S" UpdateTaskInfo" RUNTASK
+;
+
+M: RunMenu ( -- ) ShowMenu ?DUP IF menu-action THEN ;
+\ ---------------------------------
+
+: OnReturn ( -- )
+    GetFocus
+    CASE
+      but_cancel handle @ OF FALSE ENDOF
+      but_reload handle @ OF FALSE ENDOF
+      but_apply handle @ OF FALSE ENDOF
+      but_curtime handle @ OF FALSE ENDOF
+      DUP OF onOk TRUE ENDOF
+    ENDCASE
+;
+
+: OnTab ( -- )
+    GetFocus ed_seltask handle @ =
+    IF
+      VK_SHIFT GetKeyState 128 AND 0<>
+      IF
+        but_curtime SetFocus
+        BS_DEFPUSHBUTTON but_curtime AddStyle
+      ELSE
+        rb_newtime SetFocus
+      THEN
+      TRUE
+    ELSE
+      FALSE
+    THEN
+;
+
+: processKeyDown
+    wparam @
+    CASE
+      VK_TAB OF OnTab ENDOF
+      VK_RETURN OF OnReturn ENDOF
+      VK_ESCAPE OF onCancel TRUE ENDOF
+      VK_F1 OF open-help TRUE ENDOF
+      FALSE SWAP
+    ENDCASE
+;
+
+: GetClientSize ( -- )
+    0 0 0 0 SP@ handle @ GetClientRect DROP 2DROP
+    ClientW ! ClientH !
+;
+
+WINAPI: SetWindowPos USER32.DLL
+WINAPI: SystemParametersInfoA USER32.DLL
+WINAPI: SetTimer USER32.DLL
+
+M: SetWinPosCenter { \ b r y x h w }
+    0 0 0 0 SP@ 0 SWAP 0 SPI_GETWORKAREA SystemParametersInfoA DROP
+    TO x TO y TO r TO b
+    r x - TO w
+    b y - TO h
+    w winwidth - 2 / x + TO x
+    h winheight - 2 / y + TO y
+    0 winheight winwidth y x HWND_TOP handle @ SetWindowPos DROP
+;
+
+M: Create
+    0 TO 1st-row 0 TO 1st-col
+    0 Create
+    SetWinPosCenter
+    S" nnCron Task Manager" SetText
+    AutoCreate
+    0 1000 IDT_CUR_TIME handle @ SetTimer DROP
+    lv_tasks SetFocus
+    ['] processKeyDown onKeyDown !
+    ['] PasteTime dt_newtime OnChange !
+    ['] PasteTime ed_min OnChange !
+    ['] PasteTime ed_hour OnChange !
+    ['] PasteTime ed_day OnChange !
+    ['] PasteTime ed_mon OnChange !
+    ['] ShowSelTask lv_tasks OnClick !
+    ['] ShowSelTask lv_tasks OnKeyDown !
+    ['] RunSelTask lv_tasks OnDoubleClick !
+    ['] RunMenu lv_tasks OnRClick !
+    ['] TimeType rb_cronformat OnClick !
+    ['] TimeType rb_newtime OnClick !
+    ['] TimeType rb_after OnClick !
+    rb_newtime Checked
+    TimeType
+    ShowCurTime
+    GetClientSize
+\    0 ClientH @ ClientW @ 0 0
+\    HWND_TOP st_fon handle @ SetWindowPos DROP
+;
+
+;CLASS
+
+
+TaskManagerDialog POINTER tmd
+
+EXPORT
+
+: TaskManager
+    TaskManagerDialog NEW TO tmd
+    tmd Create
+    tmd Show
+    tmd Run
+    tmd SELF DELETE
+    BYE
+;
+
+S" WINCON.DLL" DROP Free-Library
+
+;MODULE
+
+TaskManager
+
