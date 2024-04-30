@@ -1,0 +1,56 @@
+\ Файл:       OnceAQuarter.spf
+\ Автор:      dothen
+\ Дата:       02.03.2023
+\ Версия:     1.0
+\ Описание: OnceAQuarter - опция задачи. Предписывает запускать задачу только один раз в течение квартала.
+\ Использовать так же как другие опции OnceA* (http://www.nncron.ru/help/RU/commands/task_options.htm#OnceAHour).
+
+\ Пример:
+\ #( quarter-task
+\ WatchDir: "c:\xxx"
+\ OnceAQuarter
+\ Action:
+\    S" Вынести мусор" MsgBox
+\ )#
+
+
+0x00400000 CONSTANT CF-QUARTERLY
+0x00400F00 ' CRON-MASK-LY >BODY !
+
+: CF-QUARTERLY? CF-QUARTERLY CUR-FLAG? ;
+
+: Quarterly end-def CF-QUARTERLY CRON-FLAG1 ; IMMEDIATE
+
+: OnceAQuarter POSTPONE Quarterly ; IMMEDIATE
+
+: q1? ( mon -- ?) 1 4 WITHIN ;
+: q2? ( mon -- ?) 4 7 WITHIN ;
+: q3? ( mon -- ?) 7 10 WITHIN ;
+: q4? ( mon -- ?) 10 13 WITHIN ;
+
+: qcheck? ( xt -- ? )
+    >R
+    ly-Y @ Year@ =
+    ly-M @ R@ EXECUTE AND
+    Mon@ R> EXECUTE AND
+;
+
+\ Хак.
+\ Слово:  TEST-LY
+\ Файл:   nnCron-master.zip\nnCron-master\src\crontab.f
+\ Строка: 659
+\ Вместо TRUE
+
+:NONAME ( -- ? )
+    CF-QUARTERLY?
+    IF
+        ['] q1? qcheck?
+        ['] q2? qcheck?
+        ['] q3? qcheck?
+        ['] q4? qcheck?
+        OR OR OR 0=
+    ELSE
+        TRUE
+    THEN
+; ' TEST-LY 324 + 0x0E8 OVER C! 1+ TUCK CELL+ - SWAP !
+
