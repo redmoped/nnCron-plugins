@@ -1,0 +1,260 @@
+\ Файл:       ProcCmdLine.spf
+\ Автор:      dothen
+\ Дата:       01.05.2017
+\ Версия:     1.02
+\ Описание:
+\ Получает командную строку, или полный путь процесса x32/x64.
+
+\ Штатные слова стали работать с 64-битными процессами.
+\ FOR-PROCS FOR-PROCS: KILL KILL: PROC-EXIST? PROC-EXIST: PROC-NAME PROC-FULLNAME PROC-CLOSE PROC-CLOSE:
+\ WatchProc: и WatchProcStop: стали работать с x64 процессами.
+
+\ ------------------------------------------------------
+\ Права доступа и существование процесса не проверяются.
+\ ------------------------------------------------------
+
+\ Слова:
+\ OSx32? ( -- ? )   Разрядность операционной системы.
+\ OSx64? ( -- ? )
+\ Proc32? ( pid -- ? )    Разрядность процесса.
+\ Proc64? ( pid -- ? )
+
+\ PROC-CMDLINE ( pid -- a u )    Получает командную строку процесса.
+\ PROC-FULLNAME ( pid -- a u )   Переопределяется для 64-битной ОС.
+
+\ ProcID     Тут содержится PID после выполнении PROC-CMDLINE и PROC-FULLNAME.
+\ ProcBIT    Тут содержится строка "(32)" или "(64)" после выполнении PROC-CMDLINE и PROC-FULLNAME в 64-битной ОС. Удобно при выводе в лог или консоль (ProcBIT ASCIIZ> TYPE).
+
+
+WINAPI: GetNativeSystemInfo Kernel32.dll
+WINAPI: IsWow64Process Kernel32.dll
+
+\ Разрядность операционной системы.
+\ : OSx32? ( -- ? ) PAD GetNativeSystemInfo DROP PAD W@ 0 = ;
+\ : OSx64? ( -- ? ) PAD GetNativeSystemInfo DROP PAD W@ 9 = ;
+PAD GetNativeSystemInfo DROP PAD W@ 0 = VALUE OSx32?
+PAD GetNativeSystemInfo DROP PAD W@ 9 = VALUE OSx64?
+
+\ Разрядность процесса.
+: Proc64? ( pid -- ? )
+    0 0x400 OpenProcess >R 0 SP@ R@ IsWow64Process DROP R> CloseHandle DROP
+    0= OSx64? AND
+;
+
+: Proc32? ( pid -- ? ) Proc64? 0= ;
+
+
+\ -----------------------------------------
+\ Взятие командной строки или полного пути.
+\ -----------------------------------------
+\ USER-VALUE ProcID
+\ USER-CREATE ProcBIT 2 CELLS USER-ALLOT
+\ USER-CREATE retLength 2 CELLS USER-ALLOT
+\ USER-VALUE bufMem
+\ USER-VALUE hProc
+
+0 VALUE ProcID
+2VARIABLE ProcBIT
+2VARIABLE retLength
+0 VALUE bufMem
+0 VALUE hProc
+
+: getline ( -- a u )
+    0 bufMem retLength @ + W!
+    bufMem retLength @ 2 / UNICODE>S OVER >R S>TEMP R> FREE DROP
+;
+
+: close-free ( -- ) hProc CloseHandle DROP bufMem FREE DROP ;
+
+\ ------------------------------------
+\ Для 64-битной ОС.
+\ ------------------------------------
+OSx64? [IF]
+\ Эти функции недокументированные.
+WINAPI: NtWow64QueryInformationProcess64 ntdll.dll
+WINAPI: NtWow64ReadVirtualMemory64 ntdll.dll
+
+: ReadProcMemory64 { size offset -- }
+    retLength                \ Сколько прочитано байт (32-битный адрес 64-битной ячейки).
+    0 size                   \ Сколько надо прочитать байт (64-битное число).
+    bufMem                   \ Приемный буфер (32-битный адрес).
+    bufMem offset + CELL + @ \ Вторая половина 64-битного адреса
+    bufMem offset + @        \ Первая половина 64-битного адреса из которого читать.
+    hProc                    \ Дескриптор процесса (32-битный).
+    NtWow64ReadVirtualMemory64 DUP IF ." Error: NtWow64ReadVirtualMemory64" CR THEN
+;
+
+: PROC-CMDLINE ( pid -- a u )
+    TO ProcID
+    ProcID 9 < IF S" (64)" ProcBIT ZPLACE S" " EXIT THEN   \ Не открывать роцесс бездействия системы и процесс System т.к система безопасности ограничивает доступ к ним.
+    ProcID FALSE 0x410 OpenProcess TO hProc
+    S" "
+    hProc 0= IF ." Error: OpenProcess" CR EXIT THEN
+
+    4096 ALLOCATE THROW TO bufMem
+
+    0 SP@ hProc IsWow64Process DROP IF S" (32)" ELSE S" (64)" THEN ProcBIT ZPLACE \ строка "(32)" или "(64)"
+
+    retLength 48 bufMem 0 hProc NtWow64QueryInformationProcess64 \ Читать PROCESS_BASIC_INFORMATION64
+    IF close-free ." Error: NtWow64QueryInformationProcess64" CR EXIT THEN
+
+    40  8  ReadProcMemory64 IF close-free EXIT THEN  \ Читать PEB64
+    128 32 ReadProcMemory64 IF close-free EXIT THEN  \ Читать RTL_USER_PROCESS_PARAMETERS64
+    PROC-FULLPATH? @
+    IF
+      bufMem 96  + W@ 104 ReadProcMemory64 IF close-free EXIT THEN \ Читать ImagePathName
+    ELSE
+      bufMem 112 + W@ 120 ReadProcMemory64 IF close-free EXIT THEN \ Читать CommandLine
+    THEN
+    2DROP getline
+    close-free
+;
+
+\ -----------------------------------------
+\ Встраивание (делается если ОС 64-битная).
+\ -----------------------------------------
+
+: (WalkProc) ( -- )
+    S" *" -1 WTS-FOR-PROCS
+      PROC-FULLPATH? @
+      IF
+        WTS-FOUND-PROCESSID PROC-CMDLINE
+      ELSE
+        WTS-FOUND-PROCESSNAME
+      THEN
+      WTS-FOUND-PROCESSID xtWalkProc @ EXECUTE 0= WTS-FP-CUT? !
+    ;WTS-FOR-PROCS
+;
+
+\ Хак: В скомпилированное слово WalkProcNT (spf4-20.rar\devel\~nn\lib\proc.f) вставляется переход на новое слово.
+:NONAME ( xt -- ) xtWalkProc ! GetDebugPriv (WalkProc) ;
+' WalkProcNT JMP
+
+\ Переопределяем слово PROC-FULLNAME
+: PROC-FULLNAME ( pid -- a u)
+    PROC-FULLPATH? ON
+    PROC-CMDLINE
+    PROC-FULLPATH? OFF
+;
+[THEN]
+
+\ ------------------------------------
+\ Для 32-битной ОС.
+\ ------------------------------------
+OSx32? [IF]
+WINAPI: ReadProcessMemory Kernel32.dll
+
+: ReadProcMemory32 { size offset -- }
+    retLength         \ Сколько прочитано байт.
+    size              \ Сколько надо прочитать байт.
+    bufMem            \ Приемный буфер.
+    bufMem offset + @ \ Адрес из которого читать.
+    hProc             \ Дескриптор процесса.
+    ReadProcessMemory 0= DUP IF ." Error: ReadProcessMemory" CR THEN
+;
+
+\ Слово может работать и в 64-битной ОС но только для 32-битных процессов.
+: PROC-CMDLINE ( pid -- a u )
+    TO ProcID  0. ProcBIT 2!
+    ProcID 9 < IF S" " EXIT THEN   \ Не открывать роцесс бездействия системы и процесс System т.к система безопасности ограничивает доступ к ним.
+    ProcID FALSE 0x410 OpenProcess TO hProc
+    S" "
+    hProc 0= IF ." Error: OpenProcess" CR EXIT THEN
+
+    4096 ALLOCATE THROW TO bufMem
+
+    0 SP@ hProc IsWow64Process DROP 0= OSx64? AND \ Проверка на случай выполнения слова в 64-битной ОС. 64-битные процесы не читаем.
+    IF close-free ." Error: Process x64" CR EXIT THEN
+
+    retLength 24 bufMem 0 hProc NtQueryInformationProcess   \ Читать PROCESS_BASIC_INFORMATION
+    IF close-free ." Error: NtQueryInformationProcess" CR EXIT THEN
+
+    20 4  ReadProcMemory32 IF close-free EXIT THEN  \ Читать PEB (вся PEB=472)
+    72 16 ReadProcMemory32 IF close-free EXIT THEN  \ Читать RTL_USER_PROCESS_PARAMETERS
+    PROC-FULLPATH? @
+    IF
+      bufMem 56 + W@ 60 ReadProcMemory32 IF close-free EXIT THEN \ Читать ImagePathName
+    ELSE
+      bufMem 64 + W@ 68 ReadProcMemory32 IF close-free EXIT THEN \ Читать CommandLine
+    THEN
+    2DROP getline
+    close-free
+;
+[THEN]
+
+
+
+
+\EOF
+
+
+
+
+\ Примеры
+#( task_test_proccmdline
+\ NoActive
+Action:
+    FOR-PROCS: "*"
+      FOUND-PROC TYPE
+      FOUND-PID PROC-FULLNAME ProcBIT ASCIIZ> TYPE SPACE
+      FOUND-PID . CR TYPE CR
+      FOUND-PID PROC-CMDLINE TYPE CR CR
+    ;FOR-PROCS
+
+    0 PROC-NAME TYPE CR
+    S" ex*er.exe" PROC-EXIST? PROC-CMDLINE TYPE CR
+\    KILL: "hh.exe"
+)#
+
+#( task_test_WatchProc
+\ NoActive
+ WatchProc: "*"
+Action:
+   WATCH-PROC-ID PROC-NAME TYPE SPACE
+   WATCH-PROC-ID Proc64? IF ." (x64)" ELSE ." (x32)" THEN CR
+   WATCH-PROC-ID PROC-CMDLINE TYPE CR CR
+)#
+
+
+
+
+
+\ Архив.
+\ Первоначальный вариант встраивания.
+\ -----------------------------------
+OSx64? [IF]
+\ ForEachProcess   отсюда: spf4-20.rar\devel\~ac\lib\win\process\enumproc.f
+\ Константы объявлены тут: spf4-20.rar\devel\~nn\lib\proc95.f
+\ Если есть задачи с WatchProc:, WatchProcStop: т.е. если функция CreateToolhelp32Snapshot выполняется в цикле, то ошибки страниц не прекращаются.
+: ForEachProcess2  { xt \ hSnap pe -- }
+    0 TH32CS_SNAPPROCESS CreateToolhelp32Snapshot TO hSnap
+    hSnap INVALID_HANDLE_VALUE = IF GetLastError THROW THEN
+    /PROCESSENTRY32 ALLOCATE THROW TO pe
+    /PROCESSENTRY32 pe pe.th32dwSize !
+    pe hSnap Process32First 1 =
+    IF
+      BEGIN
+        pe xt EXECUTE 0=
+        pe hSnap Process32Next 0= OR
+      UNTIL
+    THEN
+    pe FREE THROW
+    hSnap CLOSE-FILE THROW
+;
+
+: (WalkProc_) ( addr-PROCESSENTRY32 -- )
+    >R
+    PROC-FULLPATH? @
+    IF
+      R@ pe.th32ProcessID @ PROC-CMDLINE
+    ELSE
+      R@ pe.szExeFile ASCIIZ>
+    THEN
+    R> pe.th32ProcessID @ xtWalkProc @ EXECUTE
+;
+
+\ Хак: В скомпилированное слово WalkProcNT (spf4-20.rar\devel\~nn\lib\proc.f) вставляется переход на новое слово.
+:NONAME ( xt -- ) xtWalkProc ! GetDebugPriv ['] (WalkProc_) ForEachProcess2 ;
+' WalkProcNT JMP
+[THEN]
+
