@@ -1,0 +1,793 @@
+\ Файл:       WordsLike.spf
+\ Автор:      dothen
+\ Дата:       17.04.2023
+\ Версия:     4.0
+\ Описание: GUI версия WORDS-LIKE (http://www.nncron.ru/help/RU/working/plugins/tools.spf.htm)
+\ Ищет в словарях nnCron и TM все слова, имена которых содержат заданный фрагмент.
+
+\ Скачать wincon.dll и положить в папку "plugins".
+\ https://sourceforge.net/projects/spf/files/libs
+
+\ Эту задачу необходимо добавить в любой подключённый кронтаб.
+\ #( WordsLike
+\ WatchHotKey: "$W" \ Hotkey: Win+W (можно изменить или убрать).
+\ Action:
+\ WORDSLIKE
+\ )#
+
+\ Можно запускать из консоли: WORDSLIKE
+
+\ Если для поиска задать пустую строку или пробел то получим список всех слов.
+\ В списке найденных слов перед некоторыми словами стоит буква v (словарь) или буква i (IMMEDIATE).
+
+\ Кнопка "Search"    - Поиск с учетом регистра.
+\ Кнопка "ISearch"   - Поиск без учета регистра (IgnoreCase).
+\ Кнопка "WordList"  - Выводит список словарей.
+\ Кнопка "Task"      - Выводит список задач.
+\ Кнопка "Immediate" - Выводит список Immediate слов.
+\ Чекбокс "Full"     - Выполнять поиск по всем словарям, иначе только в словаре FORTH.
+
+\ Если фокус находится в строке ввода то действуют горячие клавиши:
+\ Enter            - Поиск с учетом регистра для nnCron.
+\ Ctrl+Enter       - Поиск с учетом регистра для TM.
+\ Shift+Enter      - Поиск без учета регистра для nnCron.
+\ Shift+Ctrl+Enter - Поиск без учета регистра для TM.
+\ Alt+Up/Down      - Выпадающий список с историей поиска.
+
+MODULE: WORDSLIKE_MODULE
+
+ModuleName ONLYNAME S" nncron.exe" COMPARE 0=
+VALUE nncron?
+
+VARIABLE bufsize \ Размер буфера для списка найденных слов.
+USER nWORDS \ Количество всех слов в словаре.
+USER nMATCH \ Количество всех найденных слов.
+USER nBINGO \ Количество точных найденных слов.
+USER nCOUNT \ Количество словарей/задач.
+USER xt-search
+USER-VALUE WBUF
+
+USER-CREATE SUBWORD 64 USER-ALLOT
+
+1 CONSTANT WL_FULL
+2 CONSTANT WL_ICASE
+4 CONSTANT WL_VOCLIST
+8 CONSTANT WL_TASKLIST
+16 CONSTANT WL_IMMEDIATE
+
+USER FLAGS_TM
+USER FLAGS_CRON
+USER FLAGS_PREV
+USER-VALUE FLAGS_WL
+
+: WL-FLAG? ( mask -- ? ) FLAGS_WL @ AND 0<> ;
+: ICASE?     ( -- ? ) WL_ICASE     WL-FLAG? ;
+: FULL?      ( -- ? ) WL_FULL      WL-FLAG? ;
+: VOCLIST?   ( -- ? ) WL_VOCLIST   WL-FLAG? ;
+: TASKLIST?  ( -- ? ) WL_TASKLIST  WL-FLAG? ;
+: IMMEDIATE? ( -- ? ) WL_IMMEDIATE WL-FLAG? ;
+
+: SET-WL-FLAG ( mask --)
+    FLAGS_WL @ OR FLAGS_WL !
+;
+
+: CLR-WL-FLAG ( mask --)
+    -1 XOR FLAGS_WL @ AND FLAGS_WL !
+;
+
+: +WBUF ( a u -- )
+    WBUF +ZPLACE
+;
+
+: TitleWordsLike ( -- a u )
+    S" nnCron - Words Like"
+;
+
+: set-xt-search ( -- )
+    ICASE? IF ['] ISEARCH ELSE ['] SEARCH THEN xt-search !
+;
+
+\ Вычислить размер буфера для списка всех слов словаря.
+: SetBufSize ( -- )
+    nWORDS 0! nMATCH 0!
+    CONTEXT @ @
+    BEGIN ?DUP WHILE
+        DUP C@ nMATCH +! \ суммарная длина слов
+        nWORDS 1+! \ количество слов
+        CDR
+    REPEAT
+    nWORDS @ 5 * nMATCH @ + 2* bufsize ! \ задаем размер с запасом (в два раза больше).
+    nWORDS 0! nMATCH 0!
+;
+
+: (GetWordsLike) ( wid -- )
+    @
+    BEGIN ?DUP WHILE
+        DUP COUNT SUBWORD COUNT xt-search @ EXECUTE
+        IF
+            2 PICK NAME>F C@ 3 AND          \ &IMMEDIATE + &VOC = 3
+            CASE
+                0 OF S"    " ENDOF
+                1 OF S" i  " ENDOF
+                2 OF S" v  " ENDOF
+            ENDCASE
+            +WBUF
+            2 PICK 1+ SUBWORD C@ D= IF S" . . . . . . . .  " +WBUF nBINGO 1+! THEN
+            DUP COUNT +WBUF CRLF +WBUF
+            nMATCH 1+!
+        ELSE
+            2DROP
+        THEN
+        nWORDS 1+!
+        CDR
+    REPEAT
+;
+
+: GetImmediate ( wid -- )
+    @
+    BEGIN ?DUP WHILE
+        DUP ?IMMEDIATE
+        IF
+           \ S" i  " +WBUF
+            DUP COUNT +WBUF
+            CRLF +WBUF
+            nMATCH 1+!
+        THEN
+        CDR
+    REPEAT
+;
+
+: GetWordsLikeFORTH ( -- )
+    FORTH-WORDLIST
+    IMMEDIATE? IF GetImmediate ELSE (GetWordsLike) THEN
+;
+
+: GetVoc ( addr -- )
+        S" wid=" +WBUF DUP CELL+ N>S +WBUF S"  name=" +WBUF
+        DUP
+        2CELL + @ ?DUP
+        IF
+            COUNT +WBUF
+        ELSE
+            DUP CELL+ FORTH-WORDLIST = IF S" FORTH" ELSE S" <NONAME>" THEN +WBUF
+        THEN
+        CRLF +WBUF
+        nCOUNT 1+!
+;
+
+: GetWordsLikeFull ( -- )
+    VOC-LIST @
+    BEGIN ?DUP WHILE
+        WBUF ASCIIZ> + >R
+        nMATCH @ >R
+        GetVoc
+        DUP CELL+ IMMEDIATE? IF GetImmediate ELSE (GetWordsLike) THEN
+        CRLF +WBUF
+        R> nMATCH @ = IF 0 R@ C! THEN RDROP
+        @
+    REPEAT
+;
+
+: GetVocList ( -- )
+    VOC-LIST @
+    BEGIN ?DUP WHILE
+        GetVoc
+        @
+    REPEAT
+;
+
+VECT GetTaskList ' NOOP TO GetTaskList
+
+nncron?
+[IF]
+:NONAME  ( -- )
+    CRON-LIST
+    BEGIN @ ?DUP WHILE
+        DUP CRON-NAME @ COUNT +WBUF
+        CRLF +WBUF
+        nCOUNT 1+!
+    REPEAT
+;
+TO GetTaskList
+[THEN]
+
+: GetWordsLike ( -- )
+    nMATCH 0!
+    nWORDS 0!
+    nBINGO 0!
+    nCOUNT 0!
+    WBUF   0!
+    TASKLIST? IF GetTaskList EXIT THEN
+    VOCLIST? IF GetVocList EXIT THEN
+    FULL? IF GetWordsLikeFull ELSE GetWordsLikeFORTH THEN
+;
+
+: BuildReport ( -- )
+    WBUF 0!
+    VOCLIST?   IF nCOUNT @ N>S +WBUF S"   WordList"  +WBUF EXIT THEN
+    TASKLIST?  IF nCOUNT @ N>S +WBUF S"   Task"      +WBUF EXIT THEN
+    IMMEDIATE? IF nMATCH @ N>S +WBUF S"   IMMEDIATE" +WBUF
+            FULL? IF S"   Full" ELSE S"   FORTH" THEN +WBUF EXIT THEN
+    S" Найдено: " +WBUF
+    nBINGO @ N>S  +WBUF
+    S" /"         +WBUF
+    nMATCH @ N>S  +WBUF
+    S" /"         +WBUF
+    nWORDS @ N>S  +WBUF
+    S"  Длина: "  +WBUF
+    SUBWORD C@ N>S +WBUF
+    ICASE? IF S"  ISearch" +WBUF THEN
+    FULL?  IF S"  Full" ELSE S"  FORTH" THEN +WBUF
+;
+
+WINAPI: SendMessageA USER32.DLL
+
+74 CONSTANT WM_COPYDATA
+2003 CONSTANT RUN_TASK
+
+USER-CREATE copydata 3 CELLS USER-ALLOT   \ COPYDATASTRUCT
+
+: SendCopyData { a u wParam hwnd -- }
+\    copydata 0!
+    u copydata CELL+ !
+    a copydata 2CELL + !
+    copydata wParam WM_COPYDATA hwnd SendMessageA
+    0= IF S" COPYDATA ERROR %ModuleName%" EVAL-SUBST 2DUP TYPE CR MsgBox THEN
+;
+
+nncron?
+[IF]
+
+USER hwnd-tm
+USER hwnd_cb_input
+USER hwnd_st_hidden
+
+: get-hwnd-tm ( -- )
+    TitleWordsLike DROP Z" spfwinclass" FindWindowA hwnd-tm !
+    hwnd-tm @ 0= IF EXIT THEN
+    0 Z" ComboBox" 0 hwnd-tm @ FindWindowExA hwnd_cb_input !
+    0 Z" Static" hwnd_cb_input @ hwnd-tm @ FindWindowExA hwnd_st_hidden !
+;
+
+: Send2tm ( a u wParam -- )
+    hwnd-tm @ SendCopyData
+;
+
+: GET-WTEXT ( hwnd -- a u )
+    >R PAD DUP 256 13 R> SendMessageA
+;
+
+: SetSubword ( -- )
+    hwnd_cb_input @ GET-WTEXT SUBWORD PLACE0
+    hwnd_st_hidden @ GET-WTEXT S>NUM FLAGS_CRON !
+;
+
+: SetOptions ( -- )
+    FLAGS_CRON TO FLAGS_WL
+    SetSubword
+    set-xt-search
+;
+
+EXPORT
+
+: RUN-WORDS-LIKE ( -- )
+    SetBufSize \ Для nncron.exe.
+    S" REQUIRE WordsLike plugins\WordsLike.spf" StartTM
+;
+
+: GET-WORDS-LIKE ( -- )
+    SetOptions
+    bufsize @ ALLOCATE THROW TO WBUF
+    GetWordsLike
+    WBUF ASCIIZ> 0 Send2tm
+    BuildReport
+    WBUF ASCIIZ> 1 Send2tm
+    WBUF FREE THROW
+;
+
+: WORDSLIKE
+    get-hwnd-tm
+    hwnd-tm @ 0<>
+    IF
+        hwnd_st_hidden @ GET-WTEXT S>NUM 128 <>
+        IF GET-WORDS-LIKE EXIT THEN
+    THEN
+    RUN-WORDS-LIKE
+;
+
+;MODULE
+
+\EOF
+
+[THEN]
+
+\ Создадим временный словарь для работы с wincon.dll
+\ ---------
+GET-CURRENT
+TEMP-WORDLIST ALSO CONTEXT ! DEFINITIONS
+
+\ Слова из nnsrc.zip\cron\plugins\wincon.f (http://www.nncron.ru/download/nnsrc.zip).
+WINAPI: FindWin32Constant plugins/WINCON.DLL
+
+: ?WIN-CONST-SLITERAL ( addr u -- )
+    2>R 0 SP@ 2R> SWAP FindWin32Constant 0= IF DROP -321 THROW THEN [COMPILE] LITERAL ;
+
+WARNING @ WARNING 0!
+: NOTFOUND ( addr u -- )
+    2DUP 2>R ['] ?WIN-CONST-SLITERAL CATCH IF 2DROP 2R> ?SLITERAL ELSE 2R> 2DROP THEN ;
+WARNING !
+
+\ Освободить и выгрузить загруженный модуль DLL.
+: Free-Library ( addr -- )
+    GetModuleHandleA ?DUP IF BEGIN DUP FreeLibrary 0= UNTIL DROP THEN
+;
+
+SET-CURRENT
+\ ---------
+
+CLASS: ComboBoxEd <SUPER Control
+var OnEditChange
+var OnSelChange
+VM: Style  CBS_DROPDOWN CBS_AUTOHSCROLL OR WS_VSCROLL OR ;
+VM: Type S" combobox" ;
+VM: Add ( addr u -- )  DROP 0 CB_ADDSTRING SendMessage DROP ;
+M: Clear ( -- ) 0 0 CB_RESETCONTENT SendMessage DROP ;
+M: Current ( -- index ) 0 0 CB_GETCURSEL SendMessage ;
+M: Current! ( index -- ) 0 SWAP CB_SETCURSEL SendMessage DROP ;
+M: Get ( a index -- a u )  OVER SWAP CB_GETLBTEXT SendMessage ;
+M: GetCurrent ( a -- a u ) Current DUP CB_ERR = IF DROP 0 ELSE Get THEN ;
+M: SetCueBanner ( addr -- ) 0 0x1703 SendMessage DROP ;
+M: isFocus ( -- ? ) GetFocus GetParent handle @ = ;
+M: isShow ( -- ? ) 0 0 CB_GETDROPPEDSTATE SendMessage ;
+M: SetShow ( flg --  ) 0 SWAP CB_SHOWDROPDOWN SendMessage DROP ;
+M: SetMinVisible ( n -- ) 0 SWAP CB_SETMINVISIBLE SendMessage DROP ;
+M: LimitInputText ( n -- ) 0 SWAP CB_LIMITTEXT SendMessage DROP ;
+M: GetItemHeight ( -- n ) 0 0 SWAP CB_GETITEMHEIGHT SendMessage ;
+M: ShowMouse ( -- ) 0 0 WM_SETCURSOR SendMessage DROP ;
+M: Paste ( -- ) 0 0 WM_PASTE SendMessage DROP ;
+M: SetCBSize ( w h -- ) SWP_NOMOVE SWP_NOACTIVATE OR SWP_NOZORDER OR
+    SWAP ROT 0 0 0 handle @ SetWindowPos DROP ;
+C: CBN_DROPDOWN ShowMouse ;
+C: CBN_EDITCHANGE OnEditChange GoParent ;
+C: CBN_SELCHANGE OnSelChange GoParent ;
+;CLASS
+
+Window REOPEN
+M: GetTextLength ( -- n ) 0 0 WM_GETTEXTLENGTH SendMessage ;
+;CLASS
+
+Font REOPEN
+CONSTR: init
+S" MS Shell Dlg 2" DROP lpszFace ! ;  \ Tahoma
+\ S" MS Shell Dlg" DROP lpszFace ! ;  \ Microsoft Sans Serif
+;CLASS
+
+Edit REOPEN
+VM: Style ES_MULTILINE ES_READONLY OR ES_LEFT OR WS_VSCROLL OR WS_HSCROLL OR ;
+VM: AfterCreate
+    SetOwnProc
+;
+W: WM_GETDLGCODE
+    DLGC_WANTARROWS
+;
+\ Чтобы работал стиль WS_TABSTOP в Edit с ES_MULTILINE надо чтобы
+\ сообщение WM_GETDLGCODE возвращало значение без флага DLGC_WANTALLKEYS.
+\ По умолчанию WM_GETDLGCODE возвращает: DLGC_WANTCHARS | DLGC_HASSETSEL | DLGC_WANTARROWS | DLGC_WANTALLKEYS
+\ https://stackoverflow.com/questions/24117221
+;CLASS
+
+CLASS: WordsLikeDialog <SUPER FrameWindow
+332 VALUE width
+200 VALUE height
+
+GroupBox OBJ groupbox1
+    :init a v 0 1 15 15 ps -6 vX +! -5 vY +! 10 vHeight +! 10 vWidth +!
+    S" nncron.exe" text
+    WS_BORDER BS_CENTER OR vStyle ! ;
+GroupBox OBJ groupbox2
+    :init a v 0 17 15 15 ps -6 vX +! -5 vY +! 10 vHeight +! 10 vWidth +!
+    S" tm.exe" text
+    WS_BORDER BS_CENTER OR vStyle ! ;
+Edit OBJ ed_output1
+    :init a v 1 1 15 11 ps tabstop ;
+Edit OBJ ed_output2
+    :init a v 1 17 15 11 ps tabstop ;
+Bevel OBJ bevel1
+    :init a v 12 1 15 1 ps ;
+Bevel OBJ bevel2
+    :init a v 12 17 15 1 ps ;
+Static OBJ st_report1
+    :init a v 12 1 15 1 ps  2 vY +! -2 vHeight +! ;
+Static OBJ st_report2
+    :init a v 12 17 15 1 ps 2 vY +! -2 vHeight +! ;
+Static OBJ st_subword1
+    :init a v 13 1 15 1 ps ;
+Static OBJ st_subword2
+    :init a v 13 17 15 1 ps ;
+Static OBJ st_counter1
+    :init a v 0 14 2 1 ps SS_RIGHT WS_DISABLED OR vStyle ! ;
+Static OBJ st_counter2
+    :init a v 0 30 2 1 ps SS_RIGHT WS_DISABLED OR vStyle ! ;
+ComboBoxEd OBJ cb_input
+    :init a v 16 1 21 1 ps tabstop ;
+Static OBJ st_hidden
+    :init a v- 16 22 1 1 ps S" 128" text ;
+CheckBox OBJ checkbox_full
+    :init a v 16 23 2 1 ps S" Full" text tabstop ;
+
+60 CONSTANT subwordlen
+20 CONSTANT historysize \ Количество слов в истории.
+10 CONSTANT historyvisible \ Количество видимых элементов истории.
+subwordlen 2+ historysize * CONSTANT historybuflen
+
+VARIABLE cnt1
+VARIABLE cnt2
+VARIABLE line-number
+
+CREATE historybuf historybuflen ALLOT
+CREATE historybuf2 historybuflen ALLOT
+
+: historyfile ( -- a u )
+    S" var\wordslike_history" +ModuleDirName
+;
+
+: HistoryFileRead ( -- a u )
+    historybuf historybuflen historyfile FREAD
+;
+
+: NextLine ( -- a u ? )
+    10 SKIP 13 PARSE DUP ?DUP 0=
+    IF EndOfChunk 0= THEN
+;
+
+: FillComboBox ( a u -- )
+    cb_input Clear
+    <TIB
+        BEGIN NextLine WHILE
+        PAD ZPLACE PAD ASCIIZ> cb_input Add
+        REPEAT
+        2DROP
+    TIB>
+    0 cb_input Current!
+;
+
+: HistoryFromFile ( -- )
+    HistoryFileRead
+    FillComboBox
+;
+
+\ Не обновлять если в поле ввода первый элемент списка или пусто или выводим список словарей, задач, immediate.
+: RefreshHistory ( -- )
+    cb_input GetText 0= NIP
+    cb_input Current 0= OR
+    IMMEDIATE? OR TASKLIST? OR VOCLIST? OR
+    IF EXIT THEN
+    SUBWORD COUNT historybuf2 ZPLACE CRLF historybuf2 +ZPLACE
+    1 line-number !
+    HistoryFileRead
+    <TIB
+        BEGIN NextLine line-number @ historysize < AND WHILE
+        2DUP SUBWORD COUNT COMPARE
+        IF historybuf2 +ZPLACE CRLF historybuf2 +ZPLACE line-number 1+! ELSE 2DROP THEN
+        REPEAT
+        2DROP
+    TIB>
+    historybuf2 ASCIIZ> 2DUP
+    FillComboBox
+    historyfile FWRITE
+;
+
+0 VALUE hwnd-cron
+
+: get-hwnd-cron ( -- )
+    Z" nnCron control window" 0 FindWindowA TO hwnd-cron
+;
+
+: Send2nncron ( -- )
+    S" WordsLike"
+    RUN_TASK
+    hwnd-cron
+    SendCopyData
+;
+
+: WordsLike-nnCron ( -- )
+    get-hwnd-cron
+    hwnd-cron 0= IF S" nnCron window not found" 2DUP TYPE CR MsgBox EXIT THEN
+    FLAGS_CRON @ N>S st_hidden SetText
+    Send2nncron
+    IMMEDIATE? TASKLIST? OR VOCLIST? OR
+    IF S" " ELSE SUBWORD COUNT THEN st_subword1 SetText
+    cnt1 1+! cnt1 @ N>S st_counter1 SetText
+    RefreshHistory
+;
+
+: WordsLike-TM ( -- )
+    set-xt-search
+    bufsize @ ALLOCATE THROW TO WBUF
+    GetWordsLike
+    WBUF ASCIIZ> ed_output2 SetText
+    BuildReport
+    WBUF ASCIIZ> st_report2 SetText
+    IMMEDIATE? TASKLIST? OR VOCLIST? OR
+    IF S" " ELSE SUBWORD COUNT THEN st_subword2 SetText
+    cnt2 1+! cnt2 @ N>S st_counter2 SetText
+    WBUF FREE THROW
+    RefreshHistory
+;
+
+\ У входной строки пропускает ведущие разделители, берёт первое слово, yкорачивает если длинное.
+: GetWord ( a u1 -- a u2 )
+    <TIB NextWord TIB> subwordlen MIN
+;
+
+: set-subword ( -- )
+    cb_input GetText GetWord
+    SUBWORD PLACE0
+    SUBWORD COUNT
+    cb_input SetText
+;
+
+VARIABLE TM?
+VARIABLE flg
+
+: set-state-icase ( -- )
+    flg @ 2 =
+    isShift? OR
+    SUBWORD C@ 0> AND
+    WL_ICASE SWAP
+    IF SET-WL-FLAG ELSE CLR-WL-FLAG THEN
+;
+
+: set-state-full ( -- )
+    WL_FULL
+    checkbox_full GetCheck
+    IF SET-WL-FLAG ELSE CLR-WL-FLAG THEN
+;
+
+: set-state-voclist ( -- )
+    WL_VOCLIST
+    flg @ 3 =
+    IF SET-WL-FLAG ELSE CLR-WL-FLAG THEN
+;
+
+: set-state-tasklist ( -- )
+    WL_TASKLIST
+    TM? @ 0=
+    flg @ 4 = AND
+    IF SET-WL-FLAG ELSE CLR-WL-FLAG THEN
+;
+
+: set-state-immediate ( -- )
+    WL_IMMEDIATE
+    flg @ 5 =
+    IF SET-WL-FLAG ELSE CLR-WL-FLAG THEN
+;
+
+: WordsLikeApp ( -- )
+    TASKLIST? IF WL_TASKLIST FLAGS_PREV @ AND IF EXIT THEN THEN \ Игнорируем флаг WL_FULL чтобы не повторять текущий результат.
+    VOCLIST?  IF WL_VOCLIST  FLAGS_PREV @ AND IF EXIT THEN THEN \ То же.
+    TM? @ IF WordsLike-TM ELSE WordsLike-nnCron THEN
+;
+
+: NewSubword? ( -- ? )
+    IMMEDIATE? TASKLIST? OR VOCLIST? OR
+    IF FALSE EXIT THEN
+    TM? @ IF st_subword2 GetText ELSE st_subword1 GetText THEN
+    SUBWORD COUNT COMPARE
+;
+
+: FirstSearch? ( -- ? )
+    TM? @
+    IF
+        st_report2 GetTextLength
+    ELSE
+        st_report1 GetTextLength
+    THEN 0=
+;
+
+: preset_WordsLike ( -- )
+    FLAGS_WL @ FLAGS_PREV !
+    set-subword
+    set-state-full
+    set-state-icase
+    set-state-voclist
+    set-state-tasklist
+    set-state-immediate
+    FLAGS_PREV @ FLAGS_WL @ <>
+    FirstSearch? OR
+    NewSubword? OR
+    IF WordsLikeApp THEN \ Не повторять текущий результат (предыдущий поиск).
+;
+
+: preset_WordsLike_nnCron ( n -- )
+    flg !
+    TM? OFF
+    FLAGS_CRON TO FLAGS_WL
+    preset_WordsLike
+;
+
+: preset_WordsLike_TM ( n -- )
+    flg !
+    TM? ON
+    FLAGS_TM TO FLAGS_WL
+    preset_WordsLike
+;
+
+M: search1 1 preset_WordsLike_nnCron ;
+Button OBJ but_search1
+    :init a v 14 1 3 1 ps
+    S" Search" text
+    ['] search1 OnClick ! tabstop ;
+
+M: isearch1 2 preset_WordsLike_nnCron ;
+Button OBJ but_isearch1
+    :init a v 14 4 3 1 ps
+    S" ISearch" text
+    ['] isearch1 OnClick ! tabstop ;
+
+M: getvoc1 3 preset_WordsLike_nnCron ;
+Button OBJ but_voc1
+    :init a v 14 7 3 1 ps
+    S" WordList" text
+    ['] getvoc1 OnClick ! tabstop ;
+
+M: gettask1 4 preset_WordsLike_nnCron ;
+Button OBJ but_task1
+    :init a v 14 10 2 1 ps
+    S" Task" text
+    ['] gettask1 OnClick ! tabstop ;
+
+M: getimmediate1 5 preset_WordsLike_nnCron ;
+Button OBJ but_immediate1
+    :init a v 14 12 4 1 ps
+    S" Immediate" text
+    ['] getimmediate1 OnClick ! tabstop ;
+
+M: search2 1 preset_WordsLike_TM ;
+Button OBJ but_search2
+    :init a v 14 17 3 1 ps
+    S" Search" text
+    ['] search2 OnClick ! tabstop ;
+
+M: isearch2 2 preset_WordsLike_TM ;
+Button OBJ but_isearch2
+    :init a v 14 20 3 1 ps
+    S" ISearch" text
+    ['] isearch2 OnClick ! tabstop ;
+
+M: getvoc2 3 preset_WordsLike_TM ;
+Button OBJ but_voc2
+    :init a v 14 23 3 1 ps
+    S" WordList" text
+    ['] getvoc2 OnClick ! tabstop ;
+
+M: getimmediate2 5 preset_WordsLike_TM ;
+Button OBJ but_immediate2
+    :init a v 14 26 4 1 ps
+    S" Immediate" text
+    ['] getimmediate2 OnClick ! tabstop ;
+
+M: onCancel 1 Close ;
+Button OBJ but_cancel
+    :init a v 16 29 3 1 ps
+    S" Cancel" text
+    ['] onCancel OnClick ! tabstop ;
+
+: SearchX ( -- )
+    isControl? IF search2 ELSE search1 THEN
+;
+
+: processKeyDown
+    wparam @
+    CASE
+        VK_RETURN
+        OF
+            cb_input isFocus IF SearchX TRUE ELSE FALSE THEN
+        ENDOF
+        VK_ESCAPE
+        OF
+            cb_input isShow IF FALSE cb_input SetShow TRUE ELSE onCancel TRUE THEN
+        ENDOF
+        FALSE SWAP
+    ENDCASE
+;
+
+W: WM_COPYDATA
+    wparam @ 0=
+    IF
+        lparam @ 2CELL + @ lparam @ CELL+ @ ed_output1 SetText
+    THEN
+    wparam @ 1 =
+    IF
+        lparam @ 2CELL + @ lparam @ CELL+ @ st_report1 SetText
+    THEN
+    S" 128" st_hidden SetText
+    TRUE
+;
+
+: IS-ALPHA ( a u -- ? )
+    OVER + SWAP ?DO
+        I C@ [CHAR] A [CHAR] Z 1+ WITHIN IF UNLOOP TRUE EXIT THEN
+        I C@ [CHAR] a [CHAR] z 1+ WITHIN IF UNLOOP TRUE EXIT THEN
+        I C@ [CHAR] А [CHAR] я 1+ WITHIN IF UNLOOP TRUE EXIT THEN
+        I C@ [CHAR] Ё = I C@ [CHAR] ё = OR IF UNLOOP TRUE EXIT THEN
+    LOOP
+    FALSE
+;
+
+: ButDisable ( a u -- )
+    ?DUP IF IS-ALPHA ELSE DROP FALSE THEN
+    IF
+        but_isearch1 Enable
+        but_isearch2 Enable
+    ELSE
+        but_isearch1 Disable
+        but_isearch2 Disable
+    THEN
+;
+
+M: ButDisable1 ( -- )
+    cb_input GetText GetWord ButDisable
+;
+
+M: ButDisable2 ( -- )
+    PAD cb_input GetCurrent GetWord ButDisable
+;
+
+: SetTextComboBox ( -- )
+    -1 cb_input Current!
+    cb_input Paste
+;
+
+: TuneComboBox ( -- )
+    historyvisible cb_input SetMinVisible
+    subwordlen cb_input LimitInputText
+    cb_input GetWindowSize DROP
+    cb_input GetItemHeight historyvisible 2 + *
+    cb_input SetCBSize
+    cb_input SetFocus
+    HistoryFromFile
+    SetTextComboBox
+    Z" Write or paste or select" AZ>UNICODE
+    cb_input SetCueBanner
+;
+
+M: Create
+    0 Create
+    AutoCreate
+    width height Center
+    ['] processKeyDown onKeyDown !
+    ['] ButDisable1 cb_input OnEditChange !
+    ['] ButDisable2 cb_input OnSelChange !
+    TitleWordsLike SetText
+    TuneComboBox
+    SetBufSize \ Для tm.exe.
+;
+
+;CLASS
+
+WordsLikeDialog POINTER wld
+
+EXPORT
+
+: WordsLike ( -- )
+    WordsLikeDialog NEW TO wld
+    wld Create
+    wld Show
+    wld Run
+    wld Delete
+    BYE
+;
+
+Z" wincon.dll" Free-Library
+
+\ Удаляем временный словарь.
+CONTEXT @
+PREVIOUS
+FREE-WORDLIST
+
+;MODULE
+
+WordsLike
+
+
