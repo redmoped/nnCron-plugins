@@ -1,0 +1,181 @@
+\ Файл:       TimeOptions.spf
+\ Автор:      dothen
+\ Дата:       03.12.2023
+\ Версия:     1.65
+\ Описание: Дополнительные опции и слова для установки времени запуска задачи.
+
+\ Перед разделом Action: использовать слова:
+\ RunAfterLoad: ( "ccc" -- )  (Спецификатор) Добавляет спецификатор времени Time: (текущее время плюс n минут)
+\                                            В задачу можно включать несколько слов RunAfterLoad:
+\                                            Внимание! Если в задаче есть спецификаторы Watch*, тогда смотри опцию Also
+\ RunAfterLoad ( minutes -- ) (Спецификатор) Постфиксный вариант слова RunAfterLoad:
+\ IniTime                     (Спецификатор) Добавляет спецификатор времени Time: указывается без параметров,
+\                                            параметры т.е. строка <время в cron-формате> берётся из файла "task.ini"
+\ RunImmediately              (Опция) Задача будет запущена сразу после перечитывания кронтабов.
+
+\ Внутри раздела Action: использовать слова:
+\ Слова изменяют время следующего старта задачи.
+\ SetStr-Task-Time ( a u -- ) -       понимает шаг, интервал, диапазон, *, ?
+\ SetNum-Task-Time ( Y W M D h m -- ) вместо звёздочек ставить слово all или -1
+\ NextStartAfter: ( "ccc" -- )        Следующий запуск будет через указанное число минут.
+\ NextStartAfter ( minutes -- )       Постфиксный вариант слова NextStartAfter:
+
+\ SetTimeOtherTask  ( a u task -- )   Задаёт время запуска для указанной задачи (текущее время плюс hh:mm или n минут).
+
+\ Пример:
+\ #( Test-Set-Time
+\ Например перечитали кронтабы 31 декабря в 23 часа 58 минут:
+\ RunAfterLoad: 1   \ Установит  Time: 59 23 31 12 * *
+\ RunAfterLoad: 3   \ Установит  Time: 1 0 1 1 * *
+\ ещё примеры
+\ 3 2 RANDOM + RunAfterLoad \ Запуск через 3 или 4 минуты после перечитывания кронтабов.
+\ 3 2 RANDOM + VALUE F1st
+\ F1st RunAfterLoad
+\ RunAfterLoad: %F1st%
+\ RunAfterLoad: 01:10 \ Запуск через 1 час 10 минут после перечитывания кронтабов.
+\ RunImmediately      \ Запуск сразу после перечитывания кронтабов.
+
+\ Action:
+\ ...
+\    all Hour@ all Mon@ 1 all SetNum-Task-Time
+\    S" */2 6,7,8 ? * 7 %Year@%" SetStr-Task-Time
+\    10 NextStartAfter
+\    NextStartAfter: 60
+\    NextStartAfter: %F1st%
+\    NextStartAfter: 01:10
+\    S" 01:30" OtherTask SetTimeOtherTask
+\    S" 120" OtherTask SetTimeOtherTask
+\    S" -1" OtherTask SetTimeOtherTask \ OtherTask LAUNCH
+\ ...
+\ )#
+
+ModuleName ONLYNAME S" tm.exe" COMPARE 0= [IF] \EOF [THEN]
+
+0x100000 CONSTANT CF-RUN \ Флаг, добавляется в поле CRON-FLAGS структуры CRON-NODE
+0x200000 CONSTANT CF-INI-TIME \ Флаг, добавляется в поле CRON-FLAGS структуры CRON-NODE
+
+0 VALUE run.Y
+0 VALUE run.M
+0 VALUE run.D
+0 VALUE run.h
+0 VALUE run.m
+
+CREATE timestr 128 ALLOT
+
+: AddMinutes ( n -- )
+    -1 MAX 527040 MIN
+    >R Year@ Mon@ Day@ Hour@ Min@ R> MINUTE+ TO run.m TO run.h TO run.D TO run.M TO run.Y
+;
+
+\ Запускает задачи у которых установлен флаг CF-RUN
+: (RunImmediately) ( -- )
+    CRON-LIST
+    BEGIN @ ?DUP WHILE
+      DUP CRON-FLAGS @ CF-RUN AND?
+      OVER CRON-FLAGS @ CF-ACTIVE AND? AND
+      IF SP@ LAUNCH THEN
+    REPEAT
+;
+
+\ Это слово не запускать,оно выполняется автоматически сразу после перечитавания кронтабов.
+: AfterCrontabLoading ( -- ) (RunImmediately) AfterCrontabLoading ;
+
+\ -----------------------------------------------------------------
+
+: set-M: t-is-ny 0-59 GTW, DUP CUR-TIME CRON-MIN !
+    CUR-TIME CRON-T-MIN START-TIME wMinute W@ set-cron-time-table
+;
+: set-H: t-is-ny 0-23 GTW, DUP CUR-TIME CRON-HOUR !
+    CUR-TIME CRON-T-HOUR START-TIME wHour W@ set-cron-time-table
+;
+: set-W: t-is-ny 1-7 GTW, DUP CUR-TIME CRON-WDAY !
+    CUR-TIME CRON-T-WDAY START-TIME wDayOfWeek W@ ?DUP 0= IF 7 THEN set-cron-time-table
+;
+: set-D: t-is-ny 1-31 GTW, DUP CUR-TIME CRON-DAY !
+    CUR-TIME CRON-T-DAY START-TIME wDay W@ set-cron-time-table
+;
+: set-MON: t-is-ny 1-12 GTW, DUP CUR-TIME CRON-MON !
+    CUR-TIME CRON-T-MON START-TIME wMonth W@ set-cron-time-table
+;
+: set-Y: t-is-y 2000-3000 GTW, DUP CUR-TIME CRON-YEAR !
+    CUR-TIME CRON-T-YEAR START-TIME wYear W@ set-cron-time-table
+;
+
+: Set-Task-Time: ( "ccc" -- )
+    CUR-NODE CRON-TIME-LIST @ TO CUR-TIME
+    CUR-TIME /CRON-TIME ERASE
+    CUR-TIME CRON-T-MIN [ 60 24 + 31 + 7 + 12 + YEAR-RANGE 1+ + ] LITERAL 1 FILL
+    set-M:
+    set-H:
+    set-D:
+    set-MON:
+    set-W:
+    YearField @ IF set-Y: THEN
+;
+
+: 5FLIP ( x1 x2 x3 x4 x5 x6 --  x6 x5 x4 x3 x2 x1 ) SWAP 2SWAP SWAP 2ROT SWAP ;
+
+: RunAfterLoad ( u -- )
+    AddMinutes
+    S" Time: %run.m% %run.h% %run.D% %run.M% * %run.Y%" EVAL-SUBST EVALUATE
+; IMMEDIATE
+
+: RunAfterLoad: ( "ccc" -- )
+    get-string EVAL-SUBST S>MIN
+    POSTPONE RunAfterLoad
+; IMMEDIATE
+
+\ : RunImmediately ( -- ) end-def CF-RUN CRON-FLAG1 ; IMMEDIATE
+
+: RunImmediately ( -- )
+    CF-RUN CRON-FLAG1
+    S" Time: %Min@ 1-% %Hour@% %Day@% %Mon@% * %Year@%" EVAL-SUBST EVALUATE
+; IMMEDIATE
+\ Если просто CF-RUN CRON-FLAG1 то запускается как надо, но задаётся автоматически старт каждую минуту.
+\ Если CF-RUN CRON-FLAG1 и просто %Min@%... то при старте nnCron запускается по Time: и из (RunImmediately) т.е. два раза,
+\ но при перечитывании запускается только из (RunImmediately)
+\ Если без CF-RUN CRON-FLAG1 то запускается только при старте nnCron.
+
+: SetStr-Task-Time ( a u -- )
+    EVAL-SUBST timestr ZPLACE
+    S" Set-Task-Time: %timestr ASCIIZ>%" EVAL-SUBST EVALUATE
+;
+
+: SetNum-Task-Time ( m h D M W Y -- )
+    5FLIP ( Y W M D h m -- )
+    S" " timestr ZPLACE
+    6 0 DO 
+      DUP -1 = IF DROP S" *" ELSE N>S THEN
+      timestr +ZPLACE
+      S"  " timestr +ZPLACE
+    LOOP
+    timestr ASCIIZ> SetStr-Task-Time
+;
+
+: NextStartAfter ( u -- )
+    AddMinutes
+    S" Set-Task-Time: %run.m% %run.h% %run.D% %run.M% * %run.Y%" EVAL-SUBST EVALUATE
+;
+
+: NextStartAfter: ( "ccc" -- )
+    get-string
+    [COMPILE] SLITERAL
+    POSTPONE EVAL-SUBST
+    POSTPONE S>MIN
+    POSTPONE NextStartAfter
+; IMMEDIATE
+
+: all TRUE ;
+
+\ Задаёт время запуска для указанной задачи (текущее время плюс hh:mm или n минут).
+:   SetTimeOtherTask  ( a u task -- )
+    CUR-NODE >R CUR-TIME >R
+    @ TO CUR-NODE
+    S>MIN NextStartAfter
+    CUR-TASK-NAME EVALUATE TASK-ACTIVATE
+    R> TO CUR-TIME R> TO CUR-NODE
+;
+\ S" -1" позволяет нейтрализовать задачу в плане запуска по Time:, при этом задача остаётся активной.
+\ Это позволит запускать задачу по Watch*.
+
+
