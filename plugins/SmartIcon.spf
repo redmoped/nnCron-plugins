@@ -1,0 +1,186 @@
+\ Файл:       SmartIcon.spf
+\ Автор:      dothen
+\ Дата:       07.01.2024
+\ Версия:     1.4
+\ Описание: Назначает команды на "хот клики" по иконке nnCron в трее.
+\ Внимание! плагин переназначает переменные nncron.ini TrayIconDoubleClick: и TrayIconRightButton:
+\ Если используется плагин TrayIconClick.spf то он должен подключаться до плагина SmartIcon.spf.
+
+MODULE: SMARTICON-MODULE
+VECT MenuStartTask
+GET-CURRENT TEMP-WORDLIST ALSO CONTEXT ! DEFINITIONS \ Временный словарь для констант.
+: swap-cur ( wid1 -- wid2 ) GET-CURRENT SWAP SET-CURRENT ;
+: :APP ( wid1 -- wid2 si ) swap-cur :NONAME POSTPONE 0 ;
+: APP; ( wid2 si a u -- wid1 xt ) POSTPONE GUIStartApp [COMPILE] ; >R swap-cur R> ; IMMEDIATE
+: CONSTANT ( n / name --> ) CREATE , IMMEDIATE DOES> @  STATE @ IF [COMPILE] LITERAL THEN ;
+
+\ Команды на Левый клик.
+' MenuStartTask                  CONSTANT      Mouse_LClick \              Левый клик
+' TASK-MANAGER                   CONSTANT      Ctrl_LClick  \       Ctrl + Левый клик
+' open-help                      CONSTANT      Shift_LClick \      Shift + Левый клик
+' NOOP                           CONSTANT        Alt_LClick \        Alt + Левый клик
+' NOOP                           CONSTANT Ctrl_Shift_LClick \ Ctrl+Shift + Левый клик
+' NOOP                           CONSTANT  Alt_Shift_LClick \  Alt+Shift + Левый клик
+' winspy                         CONSTANT  Win_Shift_LClick \  Win+Shift + Левый клик
+' options                        CONSTANT   Ctrl_Alt_LClick \   Ctrl+Alt + Левый клик
+' nncron-options                 CONSTANT   Ctrl_Win_LClick \   Ctrl+Win + Левый клик
+' show-log                       CONSTANT    Alt_Win_LClick \    Alt+Win + Левый клик
+\ Команды на Правый клик.
+' menu                           CONSTANT      Mouse_RClick \              Правый клик
+' NOOP                           CONSTANT       Ctrl_RClick \       Ctrl + Правый клик
+' NOOP                           CONSTANT      Shift_RClick \      Shift + Правый клик
+' NOOP                           CONSTANT        Alt_RClick \        Alt + Правый клик
+' NOOP                           CONSTANT Ctrl_Shift_RClick \ Ctrl+Shift + Правый клик
+' NOOP                           CONSTANT  Alt_Shift_RClick \  Alt+Shift + Правый клик
+' NOOP                           CONSTANT  Win_Shift_RClick \  Win+Shift + Правый клик
+' NOOP                           CONSTANT   Ctrl_Alt_RClick \   Ctrl+Alt + Правый клик
+' NOOP                           CONSTANT   Ctrl_Win_RClick \   Ctrl+Win + Правый клик
+' NOOP                           CONSTANT    Alt_Win_RClick \    Alt+Win + Правый клик
+\ Команды на Средний клик.
+:APP S" calc.exe"     APP;       CONSTANT      Mouse_MClick \              Средний клик
+:APP S" notepad.exe"  APP;       CONSTANT       Ctrl_MClick \       Ctrl + Средний клик
+:APP S" mspaint.exe"  APP;       CONSTANT      Shift_MClick \      Shift + Средний клик
+:APP S" cmd.exe"      APP;       CONSTANT        Alt_MClick \        Alt + Средний клик
+:APP S" taskmgr.exe"  APP;       CONSTANT Ctrl_Shift_MClick \ Ctrl+Shift + Средний клик
+:APP S" explorer.exe" APP;       CONSTANT  Alt_Shift_MClick \  Alt+Shift + Средний клик
+:APP S" regedit.exe"  APP;       CONSTANT  Win_Shift_MClick \  Win+Shift + Средний клик
+' NOOP                           CONSTANT   Ctrl_Alt_MClick \   Ctrl+Alt + Средний клик
+' NOOP                           CONSTANT   Ctrl_Win_MClick \   Ctrl+Win + Средний клик
+' NOOP                           CONSTANT    Alt_Win_MClick \    Alt+Win + Средний клик
+\ Чтобы не запутаться можно на правую кнопку цеплять небольшие сгруппированные меню.
+\ А на левую кнопку вешать самые актуальные команды.
+
+SET-CURRENT
+
+: showmenu ( hmenu -- id )
+    menuObj GET
+    >R CronIcon hWnd @ SetForegroundWindow DROP
+    0 CronIcon hWnd @ CalcMenuYX
+    256 R@ TrackPopupMenuEx
+    R> DestroyMenu DROP
+    0 0 1024 CronIcon hWnd @ PostMessageA DROP  \ WM_USER 1024
+    menuObj RELEASE
+;
+
+VECT compare-rule
+
+: GetTaskList ( -- )
+    CRON-LIST
+    BEGIN @ ?DUP WHILE
+    DUP CRON-NAME @
+    COUNT S>TEMP 2DUP S" CLASSIC-TASK-#-" SEARCH NIP NIP compare-rule
+    IF 2DUP EVALUATE MENUITEM ELSE 2DROP THEN
+    REPEAT
+;
+\ Меню "Выполнить задачу".
+: MenuTaskList ( -- )
+    POPUPMENU
+      POPUP
+        ['] NOOP TO compare-rule GetTaskList
+        S" CLASSIC-TASK"
+      END-POPUP
+      ['] 0= TO compare-rule GetTaskList
+    END-MENU
+    showmenu ?DUP IF LAUNCH THEN
+;
+' MenuTaskList TO MenuStartTask
+
+VARIABLE combomodkeys
+
+: KEYPRESSED? ( n -- ? ) GetKeyState 128 AND? ;
+
+: getstatusmodkeys ( -- )
+    combomodkeys 0! 0
+    17 KEYPRESSED? IF 17 combomodkeys +! 1+ THEN
+    16 KEYPRESSED? IF 16 combomodkeys +! 1+ THEN
+    18 KEYPRESSED? IF 18 combomodkeys +! 1+ THEN
+    91 KEYPRESSED? IF 91 combomodkeys +! 1+ THEN
+    2 > IF -1 combomodkeys ! THEN
+;
+
+: LClick ( -- )
+    getstatusmodkeys
+    combomodkeys @ -1 = IF EXIT THEN
+    combomodkeys @
+    CASE
+         0 OF      Mouse_LClick ENDOF
+        16 OF      Shift_LClick ENDOF
+        17 OF       Ctrl_LClick ENDOF
+        18 OF        Alt_LClick ENDOF
+        33 OF Ctrl_Shift_LClick ENDOF
+        34 OF  Alt_Shift_LClick ENDOF
+       107 OF  Win_Shift_LClick ENDOF
+        35 OF   Ctrl_Alt_LClick ENDOF
+       108 OF   Ctrl_Win_LClick ENDOF
+       109 OF    Alt_Win_LClick ENDOF
+       DUP OF          ['] NOOP ENDOF
+    ENDCASE
+    EXECUTE
+;
+
+: RClick ( -- )
+    getstatusmodkeys
+    combomodkeys @ -1 = IF EXIT THEN
+    combomodkeys @
+    CASE
+         0 OF      Mouse_RClick ENDOF
+        16 OF      Shift_RClick ENDOF
+        17 OF       Ctrl_RClick ENDOF
+        18 OF        Alt_RClick ENDOF
+        33 OF Ctrl_Shift_RClick ENDOF
+        34 OF  Alt_Shift_RClick ENDOF
+       107 OF  Win_Shift_RClick ENDOF
+        35 OF   Ctrl_Alt_RClick ENDOF
+       108 OF   Ctrl_Win_RClick ENDOF
+       109 OF    Alt_Win_RClick ENDOF
+       DUP OF          ['] NOOP ENDOF
+    ENDCASE
+    EXECUTE
+;
+
+: MClick ( -- )
+    getstatusmodkeys
+    combomodkeys @ -1 = IF EXIT THEN
+    combomodkeys @
+    CASE
+         0 OF      Mouse_MClick ENDOF
+        16 OF      Shift_MClick ENDOF
+        17 OF       Ctrl_MClick ENDOF
+        18 OF        Alt_MClick ENDOF
+        33 OF Ctrl_Shift_MClick ENDOF
+        34 OF  Alt_Shift_MClick ENDOF
+       107 OF  Win_Shift_MClick ENDOF
+        35 OF   Ctrl_Alt_MClick ENDOF
+       108 OF   Ctrl_Win_MClick ENDOF
+       109 OF    Alt_Win_MClick ENDOF
+       DUP OF          ['] NOOP ENDOF
+    ENDCASE
+    EXECUTE
+;
+
+\ Удаляем временный словарь.
+CONTEXT @ PREVIOUS FREE-WORDLIST
+
+' RClick TO TrayIconRightButton
+' RClick CronIcon OnRB !
+' LClick CronIcon OnLB !
+
+' NOOP TO TrayIconDoubleClick
+' NOOP CronIcon On2LB !
+
+\ Это подстраховка т.к. в конце загрузки nnCron перезаписывает переменные OnRB и On2LB значениями из nncron.ini,
+\ т.е. значениями из переменных TrayIconRightButton и TrayIconDoubleClick (nnsrc.zip\cron\tray.f).
+
+\ Если подключен плагин TrayIconClick.spf
+S" TRAYICON_MODULE" SFIND 0=
+[IF]
+    2DROP
+[ELSE]
+    DROP
+    TrayIconLB1: LClick
+    TrayIconRB1: RClick
+    TrayIconMB1: MClick
+[THEN]
+
+;MODULE
+
