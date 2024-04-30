@@ -1,0 +1,323 @@
+\ Файл:       HintPlus.spf
+\ Автор:      dothen
+\ Дата:       07.01.2022
+\ Версия:     1.25
+\ Описание: Умеет делать таймер, часы, языковую панель.
+\ В папке "plugins" должны лежать плагины kbd_layout.spf, KbdLayout.spf и FlashWindow.spf.
+
+\ Слова: HINT: "Clock"    HINT: "Lang"    HINT: "LClock"    HINT: "Timer 15" игнорируют опцию HINT-SIZE:
+\ Опции:
+\ HINT-CENTER     ON/OFF      Выравнивает текст по центру хинта (по умолчанию OFF).
+\ HINT-BLINK      ON/OFF      Мигание хинта при его старте (по умолчанию OFF).
+\ TIMER-RUNTASK: "taskname"   Запуск задачи из таймера на финише.
+\ TIMER-STYLE:    1 2 4 8 12  Поведение таймера на финише (по умолчанию 2). (incomplete)
+\ 1 - Не выводить MsgBox; 2 - MsgBox; 4 - Мигающий MsgBox; 8 - Анимация хинта; 12 = 4+8
+
+\ Опции HINT-CENTER, HINT-BLINK, TIMER-STYLE: действуют на все последующие хинты в текущей задаче.
+
+\ Примеры:
+\ #( test_hint1
+\ NoActive
+\ Action:
+\    0 0 HINT-POS HINT: "Простой хинт"
+\    100 100 HINT-POS HINT: "Clock"
+\    130 130 HINT-POS HINT: "Lang"
+\    160 160 HINT-POS HINT: "LClock"
+\    200 200 HINT-POS HINT: "Timer 1"
+\ )#
+
+\ #( test_hint2
+\ NoActive
+\ Action:
+\    HINT-SIZE: 300 50
+\    HINT-CENTER ON HINT-BLINK ON
+\    HINT-POS: 100 100 HINT: "%USERNAME%"
+\    HINT-CENTER OFF HINT-BLINK OFF
+\    HINT-POS: 100 160 HINT: "%COMPUTERNAME%"
+\ )#
+
+\ #( test_hint3
+\ NoActive
+\ Action:
+\    HINT-POS: 300 300
+\    TIMER-STYLE: 12
+\    HINT: "Timer 1"
+\    HINT-POS: 400 400
+\    TIMER-RUNTASK: "test_hint2"
+\    TIMER-STYLE: 1 \ 1 - не показывать сообщение о завершении таймера.
+\    HINT: "Timer 2"
+\ )#
+
+\ (!) Штатный хинт автоматически центрует текст если в задаче задана опция HINT-SIZE:
+\ ---------------------------------------------------------
+ModuleName ONLYNAME S" nncron.exe" COMPARE 0=
+[IF]
+
+USER HINT-CENTER
+USER HINT-BLINK
+USER <TIMER-STYLE>
+USER <RUNTASKNAME>
+: TIMER-STYLE ( n -- ) >R R@ 1 = R@ 2 = OR R@ 4 = OR R@ 8 = OR R@ 12 = OR IF R@ <TIMER-STYLE> ! THEN RDROP ;
+: TIMER-STYLE: get-number POSTPONE LITERAL POSTPONE TIMER-STYLE ; IMMEDIATE
+: TIMER-RUNTASK   ( a u -- ) ?DUP IF S>ZTEMP ELSE DROP 0 THEN <RUNTASKNAME> ! ;
+: TIMER-RUNTASK:  ( "taskname"-- ) eval-string, POSTPONE TIMER-RUNTASK ; IMMEDIATE
+: (hint-blink)    ( -- a u | ) HINT-BLINK  @ IF S"  -blink "  HOLDS THEN ;
+: (text-align)    ( -- a u | ) HINT-CENTER @ IF S"  -center " HOLDS THEN ;
+: (timer-style)   ( -- a u | ) <TIMER-STYLE> @ ?DUP IF S>D #S 2DROP S"  -timerstyle " HOLDS THEN ;
+: (timer-runtask) ( -- a u | ) <RUNTASKNAME> @ DUP IF ASCIIZ> HOLDS S"  -runtask "  HOLDS ELSE DROP THEN ;
+
+:NONAME
+    (timer-runtask) (timer-style) (hint-blink) (text-align) S"  REQUIRE hintbuf plugins\HintPlus.spf " HOLDS tm.exe
+;
+' (HINT) 665 + 0x0E8 OVER C! 1+ TUCK CELL+ - SWAP !
+\ Было:     tm.exe HOLDS #>
+\ Стало:    (timer-runtask) (timer-style) (hint-blink) (text-align) S"  REQUIRE hintbuf plugins\HintPlus.spf " HOLDS tm.exe HOLDS #>
+' TRUE ' (HINT) 261 + 0x0E8 OVER C! 1+ TUCK CELL+ - SWAP !
+\ Было:  <HINT-POS>  @ ?DUP IF #xy S"  -pos " HOLDS THEN
+\ Стало: <HINT-POS>  @ TRUE IF #xy S"  -pos " HOLDS THEN
+\EOF
+[THEN]
+\ -----------------------------------------------------------
+VARIABLE blink blink 0!
+VARIABLE ta-center ta-center 0!
+VARIABLE timer-style 2 timer-style !
+CREATE taskname 256 ALLOT taskname 0!
+: -runtask get-string taskname ZPLACE ;
+: -timerstyle get-number timer-style ! ;
+: -blink  TRUE blink ! ;
+: -center TRUE ta-center ! ;
+WITH SplashDialog :NONAME ta-center @ ; ' Center? JMP ENDWITH
+\ -----------------------------------------------------------
+
+WINAPI: GetClassNameA USER32.DLL        \ KBDLayout.spf
+WINAPI: GetKeyboardLayout USER32.DLL    \ KBDLayout.spf
+WINAPI: GetForegroundWindow USER32.DLL  \ kbd_layout.spf
+WINAPI: GetCurrentProcessId KERNEL32.DLL
+
+REQUIRE CONSOLE-KBLT plugins\kbdlayout.spf
+REQUIRE FLASHWINDOW-START plugins\flashwindow.spf
+
+0x0113 CONSTANT WM_TIMER
+0x00A3 CONSTANT WM_NCLBUTTONDBLCLK
+
+0 VALUE HINT-HWND
+0 VALUE HXT
+0 VALUE hintbuf
+1 VALUE IDT_TIMER
+
+: >hintbuf> ( a1 u1 -- a2 u2 ) hintbuf ZPLACE hintbuf ASCIIZ> ;
+
+\ mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
+\ Доопределение класса SplashDialog.
+\ Двойной левый клик закрывает хинт.
+\ Взятие языка выполняем по таймеру.
+
+SplashDialog REOPEN
+
+    var vXtext
+    var vYtext
+
+M: TextOutHint ( a u -- )
+    SWAP vYtext @ vXtext @ dc TextOutA DROP
+;
+
+VM: CreatePopup
+    POPUPMENU
+      S" Hint (PID %GetCurrentProcessId%)" EVAL-SUBST 0 MENUITEM
+      S" Стартовал %FT-CUR FT>DD.MM.YYYY/hh:mm:ss%" EVAL-SUBST 0 MENUITEM
+      S" Close" MI_CLOSE MENUITEM
+    END-MENU
+;
+
+W: WM_NCLBUTTONDBLCLK BYE ;
+
+W: WM_TIMER
+    wparam @ IDT_TIMER =
+    HXT 0 <> AND
+    IF
+      HXT EXECUTE >hintbuf> TextOutHint
+    THEN
+    0
+;
+
+M: SetPaddingText ( -- )
+    2 0 CommFontSize? 0= IF 8 ELSE 2/ THEN * +
+    Center? IF vWidth @ 2/ ELSE 4 THEN
+    SWAP ToPixels vYtext ! vXtext !
+;
+
+M: Create
+    0 Create
+    0 1000 IDT_TIMER handle @ SetTimer DROP
+    handle @ TO HINT-HWND
+    vText @ TO hintbuf
+    SetPaddingText
+;
+
+;CLASS
+
+SplashDialog POINTER wdt \ Для многозадачности надо делать через WITH как WIN-INPUT-TEXT
+
+: (TimeSplashPlus) ( time a u -- )
+    2>R
+    SplashDialog NEW TO wdt
+    wdt vTimeOut !
+    2R> wdt Text
+    wdt Create
+    wdt Show 
+    wdt BringBack
+    blink @ IF wdt Flip THEN
+    wdt Run
+    wdt Delete
+;
+
+\ mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
+
+0 VALUE MINUTES
+0 VALUE SEC
+
+: (min>sec) ( min -- sec ) ABS 5999 MIN 60 * ; \ Максимум 99:59:00
+: min>sec ( -- ) MINUTES (min>sec) TO SEC ;
+
+: hh:mm:ss ( n n n -- a u )
+    <#
+        0 HOLD
+        t:00 t:00 t00 0 0
+    #>  1- 
+;
+
+: sec>hh:mm:ss ( sec -- a u ) ABS 3600 /MOD SWAP 60 /MOD SWAP hh:mm:ss ;
+
+CREATE HClockBuf 16 ALLOT
+
+: HClock ( -- a u )
+    GET-CUR-TIME Hour@ Min@ Sec@ hh:mm:ss HClockBuf ZPLACE HClockBuf ASCIIZ>
+;
+
+: msgtext ( -- az )
+    S" Прошло " PAD ZPLACE
+    MINUTES (min>sec) sec>hh:mm:ss PAD +ZPLACE
+    CRLF PAD +ZPLACE
+    S" Стоп в " PAD +ZPLACE
+    HClock PAD +ZPLACE
+    PAD
+;
+
+: msgtitle ( -- a u ) S" Таймер (PID %GetCurrentProcessId%)" EVAL-SUBST ;
+
+GET-CUR-TIME Sec@ VALUE cursec
+
+CREATE HTimerBuf 16 ALLOT
+
+: HTimerText ( -- a u )
+    SEC sec>hh:mm:ss HTimerBuf ZPLACE HTimerBuf ASCIIZ>
+;
+
+: HTimerSec ( -- )
+    cursec GET-CUR-TIME Sec@ DUP TO cursec <> IF SEC 1- TO SEC THEN
+;
+
+WINAPI: GetWindowRect USER32.DLL
+WINAPI: SetWindowPos  USER32.DLL
+WINAPI: AnimateWindow USER32.DLL
+
+0x00000001 CONSTANT SWP_NOSIZE
+0x00000000 CONSTANT HWND_TOP
+0x00000001 CONSTANT AW_HOR_POSITIVE
+0x00000002 CONSTANT AW_HOR_NEGATIVE
+0x00010000 CONSTANT AW_HIDE
+
+5 CONSTANT MB_RETRYCANCEL
+256 CONSTANT MB_DEFBUTTON2
+4096 CONSTANT MB_SYSTEMMODAL
+0x10000 CONSTANT MB_SETFOREGROUND
+
+: FlashMsgBox ( hwnd -- ) 50 SWAP FLASHWINDOW-ALL ;
+
+: AnimateHint ( hwnd -- )
+    >R 0 0 0 0 SP@ R> GetWindowRect DROP DROP ROT DROP SWAP 2>R
+    AW_HIDE AW_HOR_NEGATIVE OR 300 HINT-HWND AnimateWindow DROP
+    SWP_NOSIZE 0 0 2R> HWND_TOP HINT-HWND SetWindowPos DROP
+    AW_HOR_POSITIVE 300 HINT-HWND AnimateWindow DROP
+;
+
+: ShowMsgBox ( -- )
+    MB_RETRYCANCEL MB_DEFBUTTON2 OR MB_SYSTEMMODAL OR MB_SETFOREGROUND OR
+    msgtitle DROP msgtext 0 MessageBoxA
+    CASE
+        4 OF min>sec 2DROP HTimerText ENDOF \ Повторить
+        2 OF BYE ENDOF \ Отмена
+    ENDCASE
+;
+
+WINAPI: SendMessageA USER32.DLL
+74 CONSTANT WM_COPYDATA
+2003 CONSTANT RUN_TASK
+USER-CREATE copydata 3 CELLS USER-ALLOT   \ COPYDATASTRUCT
+: SendCopyData { a u dwData wParam hwnd -- }
+    dwData copydata !
+    u copydata CELL+ !
+    a copydata CELL+ CELL+ !
+    copydata wParam WM_COPYDATA hwnd SendMessageA
+    0= IF S" %msgtitle% RUN TASK ERROR" EVAL-SUBST 2DUP TYPE CR MsgBox THEN
+;
+
+: get-hwnd-cron ( -- hwnd|0 ) Z" nnCron control window" 0 FindWindowA ;
+
+: RunTask ( -- )
+    taskname ASCIIZ>
+    RUN_TASK
+    RUN_TASK
+    get-hwnd-cron
+    SendCopyData
+;
+
+: HTimer ( -- a u )
+    HTimerSec HTimerText
+    SEC 0=
+    IF
+        taskname @ 0<> IF RunTask timer-style @ 1 = IF BYE THEN THEN
+        timer-style @ 1 > IF ShowMsgBox THEN
+    THEN
+    SEC -1 = timer-style @ 2 > AND
+    IF
+        msgtitle DROP Z" #32770" FindWindowA >R \ Окно MsgBox
+        timer-style @ 4 AND IF R@ FlashMsgBox THEN
+        timer-style @ 8 AND IF R@ AnimateHint THEN
+        RDROP
+    THEN
+;
+
+: HLang ( -- a u ) CUR-KBLT GETKBLTNAME ;
+
+CREATE HLClockBuf 16 ALLOT
+
+\ Язык и время.
+: HLClock ( -- a u )
+    HLang HLClockBuf ZPLACE
+    S"  " HLClockBuf +ZPLACE
+    HClock HLClockBuf +ZPLACE
+    HLClockBuf ASCIIZ>
+;
+
+: Timer get-number TO MINUTES min>sec HTimer ['] HTimer TO HXT (TimeSplashPlus) ;
+: Clock  ( sec -- )   HClock  ['] HClock TO HXT (TimeSplashPlus) ;
+: Lang   ( sec -- )   HLang   ['] HLang TO HXT (TimeSplashPlus) ;
+: LClock ( sec -- )   HLClock ['] HLClock TO HXT (TimeSplashPlus) ;
+
+: TimeHint  { \ a u sec -- }
+    get-number TO sec GetText TO u TO a
+    a u S" Timer *" WC-COMPARE
+    a u S" Clock"  COMPARE 0= OR
+    a u S" Lang"   COMPARE 0= OR
+    a u S" LClock" COMPARE 0= OR
+    IF
+      -1 -1 CommSize 2!   \ Будет рассчитан дефолтный размер из размера шрифта и длины и количества строк.
+      sec a u EVALUATE
+    ELSE
+      sec a u (TimeSplashPlus)
+    THEN
+    BYE
+;
+
+
