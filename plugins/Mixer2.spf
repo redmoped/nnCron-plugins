@@ -1,0 +1,336 @@
+\ Файл:       Mixer2.spf
+\ Автор:      dothen
+\ Дата:       30.01.2023
+\ Версия:     1.2
+\ Описание: Изменяет основной уровень громкости системы.
+\ Совместимость: Vista и выше.
+
+\ Слова:
+\ MIXER2-MUTE      ( -- ) Выключить звук.
+\ MIXER2-UNMUTE    ( -- ) Включить звук.
+\ MIXER2-OFF       ( -- ) Выключить звук. = MIXER2-MUTE
+\ MIXER2-ON        ( -- ) Включить звук. = MIXER2-UNMUTE
+\ MIXER2-ONOFF     ( -- ) Переключатель Вкл./Выкл.
+\ MIXER2-STATE   ( -- ? ) Если TRUE то звук включен, если FALSE то звук выключен.
+\ MIXER2-VOLUME@ ( -- % ) Получить текущий уровень громкости в процентах.
+\ MIXER2-VOLUME! ( % -- ) Установить уровень громкости заданный в процентах.
+\ MIXER2+        ( % -- ) Увеличить или уменьшить уровень громкости на заданное количество процентов.
+\ MIXER2-UP      ( % -- ) Увеличить уровень громкости на заданное количество процентов.
+\ MIXER2-DOWN    ( % -- ) Уменьшить уровень громкости на заданное количество процентов.
+\ MixerBalloon ON         Показывать подсказку в системном трее.
+\ MixerBalloon OFF        Не показывать подсказку в системном трее (по умолчанию).
+\ Примеры как в http://www.nncron.ru/help/RU/commands/sounds.htm
+
+\ Примеры:
+\ #( mixer2-down
+\ SingleInstance
+\ WatchHotKey: "$,"
+\ Action:
+\ MixerBalloon ON
+\ 10 MIXER2-DOWN
+\ )#
+\ #( mixer2-up
+\ SingleInstance
+\ WatchHotKey: "$."
+\ Action:
+\ MixerBalloon ON
+\ 10 MIXER2-UP
+\ )#
+\ #( mixer2-onoff
+\ SingleInstance
+\ WatchHotKey: "$/"
+\ Action:
+\ MixerBalloon ON
+\ MIXER2-ONOFF
+\ )#
+
+WinNT? WinVerMajor 10 * WinVerMinor + 59 > AND 0= [IF] \EOF [THEN] \ Конец файла если версия ОС ниже Висты.
+
+MODULE: MIXER2
+
+WINAPI: CoInitializeEx   OLE32.DLL
+WINAPI: CoUninitialize   OLE32.DLL
+WINAPI: CoCreateInstance OLE32.DLL
+WINAPI: CLSIDFromString  OLE32.DLL
+
+0 CONSTANT S_OK
+1 CONSTANT S_FALSE
+
+USER deviceEnumerator \ Получает указатель интерфейса IMMDeviceEnumerator
+USER defaultDevice    \ Получает указатель интерфейса IMMDevice
+USER endpointVolume   \ Получает указатель интерфейса IAudioEndpointVolume
+USER tmpVolumeLevel
+USER bMute
+
+USER-VALUE hr \ Получает HRESULT
+USER-VALUE hrinit
+
+CREATE CLSID_MMDeviceEnumerator 16 ALLOT
+CREATE IID_IMMDeviceEnumerator  16 ALLOT
+CREATE IID_IAudioEndpointVolume 16 ALLOT
+
+: String>CLSID ( addr a u -- ) S>UNICODE DROP CLSIDFromString THROW ;
+
+CLSID_MMDeviceEnumerator S" {BCDE0395-E52F-467C-8E3D-C4579291692E}" String>CLSID
+IID_IMMDeviceEnumerator  S" {A95664D2-9614-4F35-A746-DE8DB63617E6}" String>CLSID
+IID_IAudioEndpointVolume S" {5CDF2C82-841E-4546-9722-0CF74078229A}" String>CLSID
+
+: FINIT ( -- )
+[ HEX
+9B C, DB C, E3 C,
+DECIMAL ] ;
+
+: SF! ( D: sf-addr -- ) ( F: r -- )
+[ HEX
+8B C, 45 C, 0 C,
+D9 C, 18 C,
+8D C, 6D C, 4 C,
+DECIMAL ] ;
+
+: SF@ ( D: sf-addr -- ) ( F: -- r )
+[ HEX
+8B C, 45 C, 0 C,
+D9 C, 0 C,
+8D C, 6D C, 4 C,
+DECIMAL ] ;
+
+: DS>F ( D: n -- ) ( F: -- r )
+[ HEX
+DB C, 45 C, 0 C,
+8D C, 6D C, 4 C,
+DECIMAL ] ;
+
+: F>DS ( F: r -- ) ( D: -- n )
+[ HEX
+8D C, 6D C, FC C,
+DB C, 5D C, 0 C,
+DECIMAL ] ;
+
+: F* ( F: r1 r2 -- r3 )
+[ HEX
+DE C, C9 C,
+DECIMAL ] ;
+
+: F/ ( F: r1 r2 -- r3 )
+[ HEX
+DE C, F9 C,
+DECIMAL ] ;
+
+: NEWVOLUMELEVEL ( % -- )
+    100 MIN 0 MAX
+    FINIT
+    DS>F
+    100 DS>F
+    F/
+    tmpVolumeLevel SF!
+;
+
+: CURVOLUMELEVEL ( -- % )
+    FINIT
+    tmpVolumeLevel SF@
+    100 DS>F
+    F*
+    F>DS
+    100 MIN 0 MAX
+;
+
+\ Инициализировать библиотеку COM
+: ComInit ( -- ) 0 0 CoInitializeEx DUP TO hr TO hrinit ;
+
+\ Закрыть библиотеку COM
+\ "Поток должен вызывать CoUninitialize один раз для каждого успешного вызова CoInitializeEx, включая любой вызов, возвращающий S_FALSE".
+: ComExit ( -- ) hrinit S_OK = hrinit S_FALSE = OR IF CoUninitialize DROP THEN ;
+
+: FAIL? ( -- ? ) hr S_OK <> ;
+
+: CURWORDNAME ( -- a u ) LATEST POSTPONE LITERAL POSTPONE COUNT ; IMMEDIATE
+
+: ERRLOG ( a u -- ) PAD ZPLACE S"  Error # " PAD +ZPLACE hr N>S PAD +ZPLACE PAD ASCIIZ> ?CRON-LOG ;
+
+\ Создать объект
+: CreateObject__MMDeviceEnumerator ( -- )
+    FAIL? IF EXIT THEN
+    deviceEnumerator
+    IID_IMMDeviceEnumerator
+    1 \ /*CLSCTX_INPROC_SERVER*/
+    0
+    CLSID_MMDeviceEnumerator
+    CoCreateInstance TO hr
+    FAIL? IF CURWORDNAME ERRLOG THEN
+;
+
+\ Уменьшить количество ссылок для интерфейса в COM-объекте.
+: deviceEnumerator_Release ( -- )
+    deviceEnumerator @ 0= IF EXIT THEN
+    deviceEnumerator @
+    deviceEnumerator @ @ 2 CELLS + @ API-CALL DROP
+    0 deviceEnumerator !
+;
+
+\ Инициализировать объект
+: deviceEnumerator_GetDefaultAudioEndpoint ( -- )
+    FAIL? IF EXIT THEN
+    defaultDevice
+    0 \ /*eConsole*/
+    0 \ /*eRender*/
+    deviceEnumerator @
+    deviceEnumerator @ @ 4 CELLS + @ API-CALL TO hr
+    FAIL? IF CURWORDNAME ERRLOG THEN
+    deviceEnumerator_Release
+;
+
+: defaultDevice_Release ( -- )
+    defaultDevice @ 0= IF EXIT THEN
+    defaultDevice @
+    defaultDevice @ @ 2 CELLS + @ API-CALL DROP
+    0 defaultDevice !
+;
+
+: defaultDevice_Activate ( -- )
+    FAIL? IF EXIT THEN
+    endpointVolume
+    0
+    1 \ /*CLSCTX_INPROC_SERVER*/
+    IID_IAudioEndpointVolume
+    defaultDevice @
+    defaultDevice @ @ 3 CELLS + @ API-CALL TO hr
+    FAIL? IF CURWORDNAME ERRLOG THEN
+    defaultDevice_Release
+;
+
+: endpointVolume_GetMasterVolumeLevelScalar ( -- )
+    FAIL? IF EXIT THEN
+    tmpVolumeLevel
+    endpointVolume @
+    endpointVolume @ @ 9 CELLS + @ API-CALL TO hr
+    FAIL? IF CURWORDNAME ERRLOG THEN
+;
+
+: endpointVolume_SetMasterVolumeLevelScalar ( -- )
+    FAIL? IF EXIT THEN
+    0
+    tmpVolumeLevel @
+    endpointVolume @
+    endpointVolume @ @ 7 CELLS + @ API-CALL TO hr
+    FAIL? IF CURWORDNAME ERRLOG THEN
+;
+
+: endpointVolume_GetMute ( -- )
+    FAIL? IF EXIT THEN
+    bMute
+    endpointVolume @
+    endpointVolume @ @ 15 CELLS + @ API-CALL TO hr
+    FAIL? IF CURWORDNAME ERRLOG THEN
+;
+
+: endpointVolume_SetMute ( -- )
+    FAIL? IF EXIT THEN
+    0
+    bMute @ \  #define TRUE 1    #define FALSE 0
+    endpointVolume @
+    endpointVolume @ @ 14 CELLS + @ API-CALL DUP S_FALSE = IF DROP S_OK THEN TO hr
+    FAIL? IF CURWORDNAME ERRLOG THEN
+;
+
+: endpointVolume_Release ( -- )
+    endpointVolume @ 0= IF EXIT THEN
+    endpointVolume @
+    endpointVolume @ @ 2 CELLS + @ API-CALL DROP
+    0 endpointVolume !
+;
+
+: MIXER2-OPEN ( -- )
+    ComInit
+    CreateObject__MMDeviceEnumerator
+    deviceEnumerator_GetDefaultAudioEndpoint
+    defaultDevice_Activate
+;
+
+: MIXER2-CLOSE ( -- )
+    endpointVolume_Release
+    ComExit
+;
+
+EXPORT
+
+USER MixerBalloon
+
+DEFINITIONS
+
+: BalloonMixerLevel ( -- )
+    MixerBalloon @
+    IF endpointVolume_GetMasterVolumeLevelScalar S" " CURVOLUMELEVEL N>S BALLOON THEN
+;
+
+: BalloonMixerMute ( -- )
+    MixerBalloon @
+    IF bMute @ 1- IF S" ON" ELSE S" OFF" THEN S" " 2SWAP BALLOON THEN
+;
+
+: SETMUTE ( 1|0 -- )
+    MIXER2-OPEN
+    bMute ! endpointVolume_SetMute
+    MIXER2-CLOSE
+    BalloonMixerMute
+;
+
+: GET-VOLUME-LEVEL ( -- % )
+    endpointVolume_GetMasterVolumeLevelScalar
+    CURVOLUMELEVEL
+;
+
+: SET-VOLUME-LEVEL ( % -- )
+    NEWVOLUMELEVEL
+    endpointVolume_SetMasterVolumeLevelScalar
+    BalloonMixerLevel
+;
+
+EXPORT
+
+: MIXER2-MUTE ( -- ) 1 SETMUTE ; \ Выключить звук.
+: MIXER2-UNMUTE ( -- ) 0 SETMUTE ; \ Включить звук.
+: MIXER2-OFF ( -- ) MIXER2-MUTE ;
+: MIXER2-ON  ( -- ) MIXER2-UNMUTE ;
+
+\ Переключатель Вкл./Выкл. Если TRUE то включен, если FALSE то выключен.
+: MIXER2-ONOFF ( -- )
+    MIXER2-OPEN
+    endpointVolume_GetMute
+    bMute @ 1 XOR bMute !
+    endpointVolume_SetMute
+    MIXER2-CLOSE
+    BalloonMixerMute
+;
+
+: MIXER2-STATE ( -- ? ) MIXER2-OPEN endpointVolume_GetMute MIXER2-CLOSE bMute @ 1- ; \ Если TRUE то включен, если FALSE то выключен.
+
+\ Получить текущий уровень громкости в процентах.
+: MIXER2-VOLUME@ ( -- % )
+    MIXER2-OPEN
+    GET-VOLUME-LEVEL
+    MIXER2-CLOSE
+;
+
+\ Установить уровень громкости заданный в процентах.
+: MIXER2-VOLUME! ( % -- )
+    MIXER2-OPEN
+    SET-VOLUME-LEVEL
+    MIXER2-CLOSE
+;
+
+\ Увеличить или уменьшить уровень громкости на заданное количество процентов.
+: MIXER2+ ( % -- )
+    MIXER2-OPEN
+    GET-VOLUME-LEVEL +
+    SET-VOLUME-LEVEL
+    MIXER2-CLOSE
+;
+
+\ Увеличить уровень громкости на заданное количество процентов.
+: MIXER2-UP ( % -- ) MIXER2+ ;
+
+\ Уменьшить уровень громкости на заданное количество процентов.
+: MIXER2-DOWN ( % -- ) NEGATE MIXER2+ ;
+
+;MODULE
+
