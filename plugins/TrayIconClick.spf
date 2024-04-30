@@ -1,0 +1,176 @@
+\ Файл:       TrayIconClick.spf
+\ Автор:      dothen
+\ Дата:       07.01.2024
+\ Версия:     1.2
+\ Описание: Обрабатывает клики по иконке nnCron в трее.
+
+\ Назначение действий на клики можно делать сразу в двух местах:
+\ 1) В плагине (смотри в конце файла).
+\ 2) В nncron.ini (в конце файла).
+\ Параметры назначенные в nncron.ini переназначают то что назначено в плагине.
+\ Пустой параметр не вносит изменений.
+
+\ Переменная DblClk <ON/OFF> - включает/отключает применение двойных кликов (по умолчанию OFF).
+\ Если DblClk ON то одинарный клик срабатывает с маленькой задержкой, это неизбежно.
+
+\ Плагин не использует параметры TrayIconDoubleClick: и TrayIconRightButton: но в nncron.ini их надо оставить.
+\ Без них не будет работать диалог "Параметры" (tm.exe Options).
+
+\ Если используется плагин SmartIcon.spf то он должен подключаться после плагина TrayIconClick.spf.
+
+VARIABLE DblClk
+
+MODULE: TRAYICON_MODULE
+
+\ Значения по умолчанию.
+' NOOP    VALUE On_LB1
+' options VALUE On_LB2
+' menu    VALUE On_RB1
+' NOOP    VALUE On_RB2
+' NOOP    VALUE On_MB1
+' NOOP    VALUE On_MB2
+
+\ Создадим временный словарь для констант.
+GET-CURRENT
+TEMP-WORDLIST ALSO CONTEXT ! DEFINITIONS
+
+\ Значение константы компилируется в код как литерал.
+: CONSTANT ( n / name --> ) \ spf4-20.rar\devel\~moleg\lib\drafts\vars2.f
+    CREATE , IMMEDIATE
+    DOES> @  STATE @ IF [COMPILE] LITERAL THEN
+;
+
+17 CONSTANT WM_QUERYENDSESSION
+22 CONSTANT WM_ENDSESSION
+786 CONSTANT WM_HOTKEY
+513 CONSTANT WM_LBUTTONDOWN
+515 CONSTANT WM_LBUTTONDBLCLK
+516 CONSTANT WM_RBUTTONDOWN
+518 CONSTANT WM_RBUTTONDBLCLK
+519 CONSTANT WM_MBUTTONDOWN
+521 CONSTANT WM_MBUTTONDBLCLK
+1024 CONSTANT WM_USER
+WM_USER 5 + CONSTANT NIN_BALLOONUSERCLICK
+-4 CONSTANT GWL_WNDPROC
+1997 CONSTANT MsgID \ nnlib.zip\~nn\lib\win\trayicon.f
+
+SET-CURRENT
+
+WINAPI: GetDoubleClickTime USER32.DLL
+
+GetDoubleClickTime VALUE dblclktime
+CronIcon uID @ VALUE IDIcon
+
+VARIABLE 1click
+VARIABLE 2click
+VARIABLE oldProc
+VARIABLE Thwnd
+
+: SendMsg ( msg -- ) IDIcon MsgID Thwnd @ PostMessageA DROP ;
+
+:NONAME ( msg -- )
+    1click OFF
+    2click OFF
+    dblclktime PAUSE
+    2click @ IF DROP 2click OFF ELSE 1click ON SendMsg THEN
+; TASK: wait-second-click
+
+: WaitSecondClick ( msg -- ) wait-second-click START CLOSE-FILE DROP ;
+
+: Detect ( xt msg -- xt | 0 )
+    DblClk @ 0= IF DROP EXIT THEN
+    1click @ 0=
+    IF
+        NIP WaitSecondClick 0
+    ELSE
+        DROP 1click OFF
+    THEN
+;
+
+: DblClk? ( xt -- )
+    DblClk @ IF 2click ON ELSE DROP 0 THEN
+;
+
+WITH TrayIcon
+
+:NONAME  { TrayMsg Object uMsg hwnd -- }
+    SP@ S0 !
+    uMsg 0x3B = IF 0 PostQuitMessage DROP FALSE EXIT THEN
+    uMsg WM_QUERYENDSESSION = IF WinNT? 0= IF 0 PostQuitMessage DROP THEN 1 EXIT THEN
+    uMsg WM_ENDSESSION = IF 0 PostQuitMessage DROP 0 EXIT THEN
+    uMsg WM_HOTKEY = Object 0 > AND IF Object => OnHotkey @ ?DUP IF EXECUTE THEN 0 EXIT THEN
+
+    uMsg MsgID =
+    IF
+        TrayMsg
+        CASE
+            WM_LBUTTONDOWN   OF On_LB1 TrayMsg Detect ENDOF
+            WM_LBUTTONDBLCLK OF On_LB2 DblClk?        ENDOF
+            WM_RBUTTONDOWN   OF On_RB1 TrayMsg Detect ENDOF
+            WM_RBUTTONDBLCLK OF On_RB2 DblClk?        ENDOF
+            WM_MBUTTONDOWN   OF On_MB1 TrayMsg Detect ENDOF
+            WM_MBUTTONDBLCLK OF On_MB2 DblClk?        ENDOF
+            NIN_BALLOONUSERCLICK OF Object => OnBalloonClick @ ENDOF
+            DUP OF 0 ENDOF
+        ENDCASE
+        ?DUP IF EXECUTE THEN
+        0
+    ELSE
+        TrayMsg Object uMsg hwnd DefWindowProcA
+    THEN
+;
+
+WNDPROC: TrayProc
+
+ENDWITH
+
+WINAPI: SetWindowLongA USER32.DLL
+
+\ Ожидаем появление окна, если в течение 20 секунд окно не появилось то выходим из цикла.
+: get-tray-hwhd ( -- )
+    200 0 DO
+    100 PAUSE
+    CronIcon hWnd @ Thwnd !
+    Thwnd @ 0<> IF LEAVE THEN LOOP
+    DROP 
+;
+
+: set-tray-proc ( -- )
+    Thwnd @ 0= IF S" Error - окно с классом SPFTrayClass не найдено" MsgBox EXIT THEN
+    ['] TrayProc GWL_WNDPROC Thwnd @ SetWindowLongA oldProc !
+;
+
+:NONAME
+    get-tray-hwhd
+    set-tray-proc
+; TASK: SetTrayProcTask
+
+: SetTrayProc ( -- ) 0 SetTrayProcTask START CLOSE-FILE DROP ;
+
+\ Удаляем временный словарь.
+CONTEXT @ PREVIOUS FREE-WORDLIST
+
+EXPORT
+
+: AfterCrontabLoading ( -- ) SetTrayProc AfterCrontabLoading ;
+
+: TrayIconLB1: get-string SFIND IF TO On_LB1 ELSE 2DROP THEN ;
+: TrayIconLB2: get-string SFIND IF TO On_LB2 ELSE 2DROP THEN ;
+: TrayIconRB1: get-string SFIND IF TO On_RB1 ELSE 2DROP THEN ;
+: TrayIconRB2: get-string SFIND IF TO On_RB2 ELSE 2DROP THEN ;
+: TrayIconMB1: get-string SFIND IF TO On_MB1 ELSE 2DROP THEN ;
+: TrayIconMB2: get-string SFIND IF TO On_MB2 ELSE 2DROP THEN ;
+
+;MODULE
+
+\ ---------------------------------------------------
+\ Здесь назначаем действия на клики по иконке в трее.
+\ ---------------------------------------------------
+TrayIconLB1: winspy
+TrayIconLB2: options
+TrayIconRB1: menu
+TrayIconRB2: open-help
+TrayIconMB1: add-reminder
+TrayIconMB2: add-new-task
+DblClk OFF
+
